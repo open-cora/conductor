@@ -1,0 +1,59 @@
+site_name: Conductor
+site_description: Walks a procedure across a beamline, one step at a time.
+repo_url: https://github.com/open-cora/conductor
+repo_name: open-cora/conductor
+edit_uri: ""
+
+theme:
+  name: material
+  custom_dir: overrides
+  features:
+    - navigation.instant
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.top
+    - toc.follow
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+extra_css:
+  - stylesheets/theme.css
+
+extra_javascript:
+  - javascripts/hero-fade.js
+
+extra:
+  hero:
+    masthead: Conductor
+    tagline: Ariadne, whose thread led the way through the labyrinth
+    image: assets/hero-conductor.webp
+    image_small: assets/hero-conductor-1200.webp
+    image_alt: >-
+      Calliope, Muse of Epic Poetry, by Charles Meynier, 1798: a woman holding an open inscribed scroll and a golden trumpet.
+    strip_label: CORA
+    strip_text: keeper
+    strip_url: https://github.com/open-cora/keeper
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
