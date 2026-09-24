@@ -142,3 +142,19 @@
 .hero[data-align="right"] .hero__inner { text-align: right; }
 .hero[data-align="right"] .hero__tagline { margin-left: auto; }
 .hero[data-align="right"] .hero__strip-inner { justify-content: flex-end; }
+
+/* The other three plates put their type over dark ground, so the raw
+   painting reads fine underneath it. Calliope's canvas opens on pale sky
+   and drapery at top left instead, which is where the eyebrow and masthead
+   sit, so a faint version of the retired wash comes back here only. */
+.hero[data-name="conductor"] .hero__layer {
+  background:
+    linear-gradient(100deg,
+      rgba(20, 7, 12, 0.55) 0%,
+      rgba(20, 7, 12, 0.38) 32%,
+      rgba(20, 7, 12, 0.08) 60%,
+      rgba(20, 7, 12, 0) 100%),
+    linear-gradient(to top,
+      rgba(12, 6, 9, 0.88) 0%,
+      rgba(12, 6, 9, 0) 34%);
+}
