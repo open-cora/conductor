@@ -44,8 +44,8 @@ extra:
     srcset: "assets/hero-conductor-1200.webp 1200w, assets/hero-conductor-2400.webp 2400w, assets/hero-conductor-3600.webp 3600w"
     image_alt: >-
       Theseus and Ariadne, by Angelica Kauffmann: Ariadne leans forward to offer Theseus the red thread that will guide him through the labyrinth.
-    credit: Angelica Kauffmann · Theseus and Ariadne · public domain
-    credit_url: https://artvee.com/dl/theseus-and-ariadne-2/
+    credit: Angelica Kauffmann · Theseus and Ariadne · Dorotheum
+    credit_url: https://www.dorotheum.com/en/l/6718410/
 
 markdown_extensions:
   - admonition
