@@ -1,8 +1,8 @@
-"""The `Aroc` seam over AROC's HTTP API, which is the only way in.
+"""The `Keeper` seam over AROC's HTTP API, which is the only way in.
 
 AROC holds no registry of conductors and dials nothing. Everything this
 conductor learns and everything it reports leaves through the surface any
-other client uses, which is what `seams.Aroc` means by every call going
+other client uses, which is what `seams.Keeper` means by every call going
 out and none coming in.
 
 ## Four verbs over five routes
@@ -147,11 +147,11 @@ class HttpClient(Protocol):
     ) -> Response: ...
 
 
-class ArocError(RuntimeError):
+class KeeperError(RuntimeError):
     """Something went wrong between this conductor and AROC."""
 
 
-class RequestRefusedError(ArocError):
+class RequestRefusedError(KeeperError):
     """AROC answered, and the answer was no.
 
     Carries the status, because the statuses mean different things to the
@@ -182,7 +182,7 @@ class RequestRefusedError(ArocError):
         self.path = path
 
 
-class UnwalkableAssignmentError(ArocError):
+class UnwalkableAssignmentError(KeeperError):
     """AROC dispatched something this package cannot build a procedure from.
 
     Both systems check what they store, and they check nearly the same
@@ -206,7 +206,7 @@ class UnwalkableAssignmentError(ArocError):
 
 
 @dataclass(slots=True)
-class HttpAroc:
+class HttpKeeper:
     """Asks a running AROC for work, and tells it how the work went.
 
     `base_url` and `token` rather than a configuration object, so that
@@ -290,7 +290,7 @@ class HttpAroc:
 
         Plan names are resolved first, before anything is built. That
         keeps a lookup that was refused distinguishable from a step that
-        could not be built: the first is an `ArocError` about reaching
+        could not be built: the first is an `KeeperError` about reaching
         AROC and the second is about what AROC sent.
         """
         raw: Sequence[Mapping[str, Any]] = procedure["steps"]
@@ -395,9 +395,9 @@ def _step_report(index: int, outcome: Outcome) -> dict[str, Any]:
 __all__ = [
     "DISPATCHED",
     "TIMEOUT_MARGIN_SECONDS",
-    "ArocError",
-    "HttpAroc",
     "HttpClient",
+    "HttpKeeper",
+    "KeeperError",
     "RequestRefusedError",
     "Response",
     "UnwalkableAssignmentError",

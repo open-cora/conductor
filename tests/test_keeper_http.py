@@ -18,20 +18,20 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from conductor.adapters.aroc_http import (
-    HttpAroc,
+from conductor.adapters.keeper_http import (
+    HttpKeeper,
     RequestRefusedError,
     UnwalkableAssignmentError,
 )
 from conductor.claims import Claim, Scope
 from conductor.outcomes import Broke, Done, Outcome, Refused, Skipped
 from conductor.procedure import Acquire, Move
-from conductor.seams import Acquired, Aroc, Citation
+from conductor.seams import Acquired, Citation, Keeper
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-BASE_URL = "https://aroc.example"
+BASE_URL = "https://keeper.example"
 TOKEN = "a-conductor-token"
 
 EXECUTION_ID = "8f1d5a6e-0b2c-4d3e-9f10-2a3b4c5d6e7f"
@@ -115,9 +115,9 @@ def _path(url: str) -> str:
     return url.removeprefix(BASE_URL)
 
 
-def _aroc(**replies: Reply) -> tuple[FakeHttp, HttpAroc]:
+def _keeper(**replies: Reply) -> tuple[FakeHttp, HttpKeeper]:
     http = FakeHttp(replies=dict(replies.items()))
-    return http, HttpAroc(http=http, base_url=BASE_URL, token=TOKEN)
+    return http, HttpKeeper(http=http, base_url=BASE_URL, token=TOKEN)
 
 
 def _listing(*rows: Mapping[str, Any]) -> Reply:
@@ -166,25 +166,25 @@ def _plan(name: str = "tomo_scan") -> Reply:
 def test_the_adapter_is_the_seam_the_core_asks_for() -> None:
     """The annotation is the check, and the assertion is the cheaper half.
 
-    Nothing else in this tree ever assigns an `HttpAroc` to an `Aroc`,
+    Nothing else in this tree ever assigns an `HttpKeeper` to an `Keeper`,
     because the entrypoint that will is not written yet, and a Protocol
     nothing is assigned to is a Protocol nothing is checked against. The
     annotation below makes the type checker compare the four signatures.
     The `isinstance` adds only that the names are present, which is what
     survives if somebody ever runs the tests without pyright.
     """
-    _, adapter = _aroc()
+    _, adapter = _keeper()
 
-    seam: Aroc = adapter
+    seam: Keeper = adapter
 
-    assert isinstance(seam, Aroc)
+    assert isinstance(seam, Keeper)
 
 
 def test_a_beamline_with_nothing_waiting_is_told_so_in_one_request() -> None:
     """An idle beamline is the common case and has to be the cheap one."""
-    http, aroc = _aroc(**{"/executions": _listing()})
+    http, keeper = _keeper(**{"/executions": _listing()})
 
-    assert aroc.take("2-bm", wait=30.0) is None
+    assert keeper.take("2-bm", wait=30.0) is None
     assert [request.path for request in http.sent] == ["/executions"]
 
 
@@ -196,9 +196,9 @@ def test_the_intake_asks_only_for_dispatched_work_at_its_own_beamline() -> None:
     hardware it does not own, and the mistake would be one round trip
     too late to take back.
     """
-    http, aroc = _aroc(**{"/executions": _listing()})
+    http, keeper = _keeper(**{"/executions": _listing()})
 
-    aroc.take("7-bm", wait=5.0)
+    keeper.take("7-bm", wait=5.0)
 
     params = http.sent[0].params
     assert params is not None
@@ -216,9 +216,9 @@ def test_a_long_poll_gives_the_socket_longer_than_the_wait_it_asked_for() -> Non
     that is happening, which is why the margin is asserted here rather
     than left to whoever builds the client.
     """
-    http, aroc = _aroc(**{"/executions": _listing()})
+    http, keeper = _keeper(**{"/executions": _listing()})
 
-    aroc.take("2-bm", wait=30.0)
+    keeper.take("2-bm", wait=30.0)
 
     asked = http.sent[0]
     assert asked.params is not None
@@ -234,17 +234,17 @@ def test_a_refused_listing_is_raised_rather_than_read_as_an_idle_beamline() -> N
     sit forever reporting nothing to do, at a beamline where work is
     piling up.
     """
-    _, aroc = _aroc(**{"/executions": Reply(403, text="not granted execution:read")})
+    _, keeper = _keeper(**{"/executions": Reply(403, text="not granted execution:read")})
 
     with pytest.raises(RequestRefusedError) as refusal:
-        aroc.take("2-bm", wait=0.0)
+        keeper.take("2-bm", wait=0.0)
 
     assert refusal.value.status == 403
 
 
 def test_an_assignment_carries_the_procedure_as_this_package_composes_one() -> None:
     """The translation, which is the whole of what `take` does after the fetch."""
-    _, aroc = _aroc(
+    _, keeper = _keeper(
         **{
             "/executions": _listing(_dispatch()),
             f"/procedures/{PROCEDURE_ID}": _procedure(_move(), _acquire("2bmb:cam1:", "2bmb:m1")),
@@ -252,7 +252,7 @@ def test_an_assignment_carries_the_procedure_as_this_package_composes_one() -> N
         }
     )
 
-    assignment = aroc.take("2-bm", wait=0.0)
+    assignment = keeper.take("2-bm", wait=0.0)
 
     assert assignment is not None
     assert assignment.execution_id == EXECUTION_ID
@@ -275,7 +275,7 @@ def test_the_step_ids_line_up_with_the_steps_they_name() -> None:
     right execution, which reads as a plausible record rather than as an
     error.
     """
-    _, aroc = _aroc(
+    _, keeper = _keeper(
         **{
             "/executions": _listing(_dispatch()),
             f"/procedures/{PROCEDURE_ID}": _procedure(_move(), _acquire()),
@@ -283,7 +283,7 @@ def test_the_step_ids_line_up_with_the_steps_they_name() -> None:
         }
     )
 
-    assignment = aroc.take("2-bm", wait=0.0)
+    assignment = keeper.take("2-bm", wait=0.0)
 
     assert assignment is not None
     assert list(assignment.step_ids) == [MOVE_STEP_ID, ACQUIRE_STEP_ID]
@@ -297,7 +297,7 @@ def test_a_plan_is_looked_up_once_however_many_procedures_cite_it() -> None:
     request per acquisition asking AROC to confirm a name that cannot
     change.
     """
-    http, aroc = _aroc(
+    http, keeper = _keeper(
         **{
             "/executions": _listing(_dispatch()),
             f"/procedures/{PROCEDURE_ID}": _procedure(_acquire(), _acquire()),
@@ -305,8 +305,8 @@ def test_a_plan_is_looked_up_once_however_many_procedures_cite_it() -> None:
         }
     )
 
-    aroc.take("2-bm", wait=0.0)
-    aroc.take("2-bm", wait=0.0)
+    keeper.take("2-bm", wait=0.0)
+    keeper.take("2-bm", wait=0.0)
 
     assert len(http.asked(f"/plans/{PLAN_ID}")) == 1
 
@@ -320,7 +320,7 @@ def test_a_scope_this_package_cannot_parse_refuses_the_whole_assignment() -> Non
     scan this package exists to refuse, so the assignment goes rather
     than the claim.
     """
-    _, aroc = _aroc(
+    _, keeper = _keeper(
         **{
             "/executions": _listing(_dispatch()),
             f"/procedures/{PROCEDURE_ID}": _procedure(_acquire(".")),
@@ -329,7 +329,7 @@ def test_a_scope_this_package_cannot_parse_refuses_the_whole_assignment() -> Non
     )
 
     with pytest.raises(UnwalkableAssignmentError) as problem:
-        aroc.take("2-bm", wait=0.0)
+        keeper.take("2-bm", wait=0.0)
 
     assert problem.value.execution_id == EXECUTION_ID
 
@@ -340,7 +340,7 @@ def test_a_step_kind_this_conductor_does_not_know_refuses_the_assignment() -> No
     Guessing from the fields present would turn that into a procedure
     walked wrong, where refusing it is a procedure nobody drove.
     """
-    _, aroc = _aroc(
+    _, keeper = _keeper(
         **{
             "/executions": _listing(_dispatch()),
             f"/procedures/{PROCEDURE_ID}": _procedure(
@@ -350,13 +350,13 @@ def test_a_step_kind_this_conductor_does_not_know_refuses_the_assignment() -> No
     )
 
     with pytest.raises(UnwalkableAssignmentError):
-        aroc.take("2-bm", wait=0.0)
+        keeper.take("2-bm", wait=0.0)
 
 
 def test_a_claim_that_was_accepted_says_the_execution_is_this_conductors() -> None:
-    _, aroc = _aroc(**{f"/executions/{EXECUTION_ID}/claim": Reply(204)})
+    _, keeper = _keeper(**{f"/executions/{EXECUTION_ID}/claim": Reply(204)})
 
-    assert aroc.claim(EXECUTION_ID) is True
+    assert keeper.claim(EXECUTION_ID) is True
 
 
 def test_a_claim_another_conductor_won_is_not_an_error() -> None:
@@ -367,17 +367,19 @@ def test_a_claim_another_conductor_won_is_not_an_error() -> None:
     adapter that raised here would make the ordinary outcome of that race
     look like a failure to the loop.
     """
-    _, aroc = _aroc(**{f"/executions/{EXECUTION_ID}/claim": Reply(409, text="not Dispatched")})
+    _, keeper = _keeper(**{f"/executions/{EXECUTION_ID}/claim": Reply(409, text="not Dispatched")})
 
-    assert aroc.claim(EXECUTION_ID) is False
+    assert keeper.claim(EXECUTION_ID) is False
 
 
 def test_a_claim_refused_for_any_other_reason_is_raised() -> None:
     """A 404 means the two disagree about what was dispatched, which is not a race."""
-    _, aroc = _aroc(**{f"/executions/{EXECUTION_ID}/claim": Reply(404, text="no such execution")})
+    _, keeper = _keeper(
+        **{f"/executions/{EXECUTION_ID}/claim": Reply(404, text="no such execution")}
+    )
 
     with pytest.raises(RequestRefusedError) as refusal:
-        aroc.claim(EXECUTION_ID)
+        keeper.claim(EXECUTION_ID)
 
     assert refusal.value.status == 404
 
@@ -424,9 +426,9 @@ def test_a_step_report_carries_the_detail_its_outcome_allows(
     formatting choice here, it is the difference between a report that
     lands and one that does not.
     """
-    http, aroc = _aroc(**{f"/executions/{EXECUTION_ID}/steps": Reply(204)})
+    http, keeper = _keeper(**{f"/executions/{EXECUTION_ID}/steps": Reply(204)})
 
-    aroc.report(EXECUTION_ID, 2, outcome)
+    keeper.report(EXECUTION_ID, 2, outcome)
 
     assert http.sent[0].json == expected
 
@@ -439,9 +441,9 @@ def test_a_refusal_reaches_aroc_as_a_refusal_and_not_as_its_reason() -> None:
     process. Sending either as a cause would be refused outright, and
     widening what a refusal may carry is a change to AROC's command.
     """
-    http, aroc = _aroc(**{f"/executions/{EXECUTION_ID}/steps": Reply(204)})
+    http, keeper = _keeper(**{f"/executions/{EXECUTION_ID}/steps": Reply(204)})
 
-    aroc.report(
+    keeper.report(
         EXECUTION_ID,
         0,
         Refused(
@@ -455,9 +457,9 @@ def test_a_refusal_reaches_aroc_as_a_refusal_and_not_as_its_reason() -> None:
 
 
 def test_finishing_says_nothing_further_is_coming() -> None:
-    http, aroc = _aroc(**{f"/executions/{EXECUTION_ID}/end": Reply(204)})
+    http, keeper = _keeper(**{f"/executions/{EXECUTION_ID}/end": Reply(204)})
 
-    aroc.finish(EXECUTION_ID)
+    keeper.finish(EXECUTION_ID)
 
     assert [(request.method, request.path) for request in http.sent] == [
         ("POST", f"/executions/{EXECUTION_ID}/end")
@@ -472,17 +474,17 @@ def test_an_execution_something_else_already_ended_is_raised_rather_than_swallow
     hearing about rather than treating as the ordinary outcome the way a
     lost claim is.
     """
-    _, aroc = _aroc(**{f"/executions/{EXECUTION_ID}/end": Reply(409, text="already ended")})
+    _, keeper = _keeper(**{f"/executions/{EXECUTION_ID}/end": Reply(409, text="already ended")})
 
     with pytest.raises(RequestRefusedError) as refusal:
-        aroc.finish(EXECUTION_ID)
+        keeper.finish(EXECUTION_ID)
 
     assert refusal.value.status == 409
 
 
 def test_every_request_carries_the_token_it_was_configured_with() -> None:
     """Including the reads. AROC grants a command per verb, not a session."""
-    http, aroc = _aroc(
+    http, keeper = _keeper(
         **{
             "/executions": _listing(_dispatch()),
             f"/procedures/{PROCEDURE_ID}": _procedure(_move()),
@@ -491,9 +493,9 @@ def test_every_request_carries_the_token_it_was_configured_with() -> None:
         }
     )
 
-    aroc.take("2-bm", wait=0.0)
-    aroc.claim(EXECUTION_ID)
-    aroc.finish(EXECUTION_ID)
+    keeper.take("2-bm", wait=0.0)
+    keeper.claim(EXECUTION_ID)
+    keeper.finish(EXECUTION_ID)
 
     assert http.sent
     for request in http.sent:
