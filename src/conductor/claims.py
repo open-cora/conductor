@@ -18,8 +18,9 @@ keys at all, and a blocking move through the second returns before the
 motion starts. Two claims built from such objects are disjoint by
 inspection and name the same hardware.
 
-So a claim names what the IOC serves. That is the only vocabulary two
-clients who have never met are obliged to agree on. The record's own
+So a claim names what the control system serves. That is the only
+vocabulary two clients who have never met are obliged to agree on. The
+record's own
 `DESC` field does not qualify: it is served empty, it is writable by any
 client, and nothing makes it unique.
 
@@ -54,7 +55,7 @@ NAMESPACE_SEPARATOR: Final = ":"
 """What marks a scope as covering everything beneath it rather than one record."""
 
 FIELD_SEPARATOR: Final = "."
-"""What separates an EPICS record from one of its fields."""
+"""What separates a record from one of its fields."""
 
 
 class InvalidScopeError(ValueError):
@@ -63,7 +64,7 @@ class InvalidScopeError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class Scope:
-    """One piece of the Channel Access namespace, claimed whole.
+    """One piece of a device namespace, claimed whole.
 
     Built through `record` or `namespace` when the caller knows which it
     means, and through `parse` when it is reading configuration.
@@ -179,9 +180,9 @@ class Ledger:
     A ledger is deliberately not durable. It records what this conductor
     is doing at this moment, and a conductor cannot promise anything
     about the moment after it dies: a spike SIGKILLed a driver and left a
-    motor moving with no stop document ever emitted. So a
-    ledger that survived a restart would be claiming to know something it
-    does not, and the recovery question belongs to whatever watches the
+    motor moving with nothing anywhere recording that it ever stopped. So
+    a ledger that survived a restart would be claiming to know something
+    it does not, and the recovery question belongs to whatever watches the
     hardware rather than to this.
     """
 
@@ -195,12 +196,18 @@ class Ledger:
         """Everyone currently holding something."""
         return frozenset(self._held)
 
-    def run(self, holder: str, claim: Claim) -> None:
+    def acquire(self, holder: str, claim: Claim) -> None:
         """Grant a claim, or refuse it naming what stands in the way.
 
         A holder already in the ledger is a bug in the caller rather than
         a conflict, so it raises the same way rather than quietly
         replacing what it had.
+
+        Named for taking a hold rather than for what the holder then
+        does. The argument that retired `acquire` from the engine seam
+        was that it names collecting data, and a lock is not data: `run`
+        here would collide with the step kind and with what an engine
+        does about one.
         """
         if holder in self._held:
             raise ClaimConflictError(
@@ -236,7 +243,7 @@ class _Granted:
     claim: Claim
 
     def __enter__(self) -> Claim:
-        self.ledger.run(self.holder, self.claim)
+        self.ledger.acquire(self.holder, self.claim)
         return self.claim
 
     def __exit__(
