@@ -9,7 +9,7 @@ out and none coming in.
 
     take     GET  /executions?beamline=&status=Dispatched&wait=
              GET  /procedures/{procedure_id}
-             GET  /plans/{plan_id}
+             GET  /operations/{operation_id}
     claim    POST /executions/{execution_id}/claim
     report   POST /executions/{execution_id}/steps
     finish   POST /executions/{execution_id}/end
@@ -19,17 +19,17 @@ an execution was dispatched and which routine it cites, and a walk needs
 the routine. The steps are deliberately not on those rows: a page of them
 carrying every step of every execution would be almost entirely steps.
 
-## Why a plan is looked up by id, and why the answer is kept
+## Why an operation is looked up by id, and why the answer is kept
 
-An acquisition step cites a `plan_id`. This package's `Acquire` holds a
-`plan`, which is the name the engine knows the routine by. Those are one
-routine under the two vocabularies that own it, and only the keeper can say
-which name goes with which id.
+A run step cites an `operation_id`. This package's `Run` holds a
+`routine`, which is the name the engine knows it by. Those are one thing
+under the two vocabularies that own it, the keeper's and the engine's, and
+only the keeper can say which name goes with which id.
 
 The answers are kept for the life of the adapter, because nothing renames
-a plan: the stream carries one event for one and there is no second that
-could change a name. A conductor walking a hundred procedures over one
-plan asks once.
+an operation: the stream carries one event for one and there is no second
+that could change a name. A conductor walking a hundred procedures over one
+operation asks once.
 
 ## The client is given, and the timeout is not
 
@@ -74,7 +74,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
 from conductor.claims import Claim, InvalidScopeError
 from conductor.outcomes import Broke, Done, Refused, Skipped
-from conductor.procedure import Acquire, InvalidProcedureError, Move, Procedure
+from conductor.procedure import InvalidProcedureError, Procedure, Run, Set
 from conductor.seams import Assignment
 
 if TYPE_CHECKING:
@@ -124,7 +124,7 @@ class HttpClient(Protocol):
     """The two verbs this adapter uses, shaped the way clients shape them.
 
     Written out rather than imported, which is what keeps this module free
-    of a dependency. `bluesky_acquisition` does the same with the engine
+    of a dependency. `bluesky_engine` does the same with the engine
     it drives, and for the same reason: what is specific here is the shape
     of a call, not a package.
     """
@@ -187,7 +187,7 @@ class UnwalkableAssignmentError(KeeperError):
 
     Both systems check what they store, and they check nearly the same
     things: both refuse an empty procedure, an empty record name and an
-    acquisition declaring no devices. What the keeper does not check is the
+    run declaring no devices. What the keeper does not check is the
     scope grammar, which it stores as written and says so, because the
     grammar belongs to whatever drives the procedure. So a scope the keeper
     holds happily can be one `claims` will not parse.
@@ -218,7 +218,7 @@ class HttpKeeper:
     http: HttpClient
     base_url: str
     token: str
-    _plan_names: dict[str, str] = field(default_factory=dict[str, str])
+    _routine_names: dict[str, str] = field(default_factory=dict[str, str])
 
     def take(self, beamline: str, wait: float) -> Assignment | None:
         """Ask for one execution dispatched to this beamline and unclaimed.
@@ -288,16 +288,16 @@ class HttpKeeper:
     def _assignment(self, execution_id: str, procedure: Mapping[str, Any]) -> Assignment:
         """Turn the keeper's procedure into one this package can walk.
 
-        Plan names are resolved first, before anything is built. That
+        Operation names are resolved first, before anything is built. That
         keeps a lookup that was refused distinguishable from a step that
-        could not be built: the first is an `KeeperError` about reaching
+        could not be built: the first is a `KeeperError` about reaching
         the keeper and the second is about what the keeper sent.
         """
         raw: Sequence[Mapping[str, Any]] = procedure["steps"]
         named = {
-            str(step["plan_id"]): self._plan_name(str(step["plan_id"]))
+            str(step["operation_id"]): self._routine_name(str(step["operation_id"]))
             for step in raw
-            if step["kind"] == "acquire"
+            if step["kind"] == "run"
         }
 
         try:
@@ -314,11 +314,13 @@ class HttpKeeper:
             step_ids=tuple(str(step["step_id"]) for step in raw),
         )
 
-    def _plan_name(self, plan_id: str) -> str:
-        """The name an engine knows a plan by, asked for once."""
-        if plan_id not in self._plan_names:
-            self._plan_names[plan_id] = str(self._get(f"/plans/{plan_id}")["name"])
-        return self._plan_names[plan_id]
+    def _routine_name(self, operation_id: str) -> str:
+        """The name an engine knows an operation by, asked for once."""
+        if operation_id not in self._routine_names:
+            self._routine_names[operation_id] = str(
+                self._get(f"/operations/{operation_id}")["name"]
+            )
+        return self._routine_names[operation_id]
 
     def _get(
         self,
@@ -347,7 +349,7 @@ class HttpKeeper:
 
 
 def _step(raw: Mapping[str, Any], named: Mapping[str, str]) -> Step:
-    """Build one step, with the plan names already in hand.
+    """Build one step, with the routine names already in hand.
 
     The kind discriminates, because it is what the keeper's own surface
     discriminates on, and a step whose kind this does not know is a step
@@ -355,11 +357,11 @@ def _step(raw: Mapping[str, Any], named: Mapping[str, str]) -> Step:
     would turn that into a procedure walked wrong rather than one refused.
     """
     match raw["kind"]:
-        case "move":
-            return Move(record=str(raw["record"]), to=float(raw["to"]))
-        case "acquire":
-            return Acquire(
-                plan=named[str(raw["plan_id"])],
+        case "set":
+            return Set(record=str(raw["record"]), to=float(raw["to"]))
+        case "run":
+            return Run(
+                routine=named[str(raw["operation_id"])],
                 claim=Claim.over(*(str(scope) for scope in raw["scopes"])),
                 parameters=dict(raw["parameters"]),
             )
@@ -379,11 +381,11 @@ def _step_report(index: int, outcome: Outcome) -> dict[str, Any]:
     the keeper's surfaces rather than by a schema on one of them.
     """
     match outcome:
-        case Done(acquired=acquired):
+        case Done(ran=ran):
             return {
                 "index": index,
                 "outcome": "Done",
-                "engine_reference": None if acquired is None else acquired.engine_reference,
+                "engine_reference": None if ran is None else ran.engine_reference,
             }
         case Refused():
             return {"index": index, "outcome": "Refused"}

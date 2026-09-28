@@ -25,8 +25,8 @@ from conductor.adapters.keeper_http import (
 )
 from conductor.claims import Claim, Scope
 from conductor.outcomes import Broke, Done, Outcome, Refused, Skipped
-from conductor.procedure import Acquire, Move
-from conductor.seams import Acquired, Citation, Keeper
+from conductor.procedure import Run, Set
+from conductor.seams import Citation, Keeper, Ran
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -36,8 +36,8 @@ TOKEN = "a-conductor-token"
 
 EXECUTION_ID = "8f1d5a6e-0b2c-4d3e-9f10-2a3b4c5d6e7f"
 PROCEDURE_ID = "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f"
-PLAN_ID = "9a8b7c6d-5e4f-4a3b-2c1d-0e9f8a7b6c5d"
-MOVE_STEP_ID = "aaaaaaaa-1111-4222-8333-444444444444"
+OPERATION_ID = "9a8b7c6d-5e4f-4a3b-2c1d-0e9f8a7b6c5d"
+SET_STEP_ID = "aaaaaaaa-1111-4222-8333-444444444444"
 ACQUIRE_STEP_ID = "bbbbbbbb-1111-4222-8333-444444444444"
 
 
@@ -139,15 +139,15 @@ def _dispatch(procedure_id: str = PROCEDURE_ID) -> dict[str, Any]:
     }
 
 
-def _move(record: str = "2bmb:m1", to: float = 0.0) -> dict[str, Any]:
-    return {"kind": "move", "step_id": MOVE_STEP_ID, "record": record, "to": to}
+def _a_set(record: str = "2bmb:m1", to: float = 0.0) -> dict[str, Any]:
+    return {"kind": "set", "step_id": SET_STEP_ID, "record": record, "to": to}
 
 
-def _acquire(*scopes: str, plan_id: str = PLAN_ID) -> dict[str, Any]:
+def _a_run(*scopes: str, operation_id: str = OPERATION_ID) -> dict[str, Any]:
     return {
-        "kind": "acquire",
+        "kind": "run",
         "step_id": ACQUIRE_STEP_ID,
-        "plan_id": plan_id,
+        "operation_id": operation_id,
         "parameters": {"exposure": 0.1},
         "scopes": list(scopes) or ["2bmb:cam1:"],
     }
@@ -159,14 +159,14 @@ def _procedure(*steps: Mapping[str, Any], name: str = "tomography") -> Reply:
     )
 
 
-def _plan(name: str = "tomo_scan") -> Reply:
-    return Reply(200, {"plan_id": PLAN_ID, "name": name, "parameters_schema": {}})
+def _operation(name: str = "tomo_scan") -> Reply:
+    return Reply(200, {"operation_id": OPERATION_ID, "name": name, "parameters_schema": {}})
 
 
 def test_the_adapter_is_the_seam_the_core_asks_for() -> None:
     """The annotation is the check, and the assertion is the cheaper half.
 
-    Nothing else in this tree ever assigns an `HttpKeeper` to an `Keeper`,
+    Nothing else in this tree ever assigns an `HttpKeeper` to a `Keeper`,
     because the entrypoint that will is not written yet, and a Protocol
     nothing is assigned to is a Protocol nothing is checked against. The
     annotation below makes the type checker compare the four signatures.
@@ -247,8 +247,8 @@ def test_an_assignment_carries_the_procedure_as_this_package_composes_one() -> N
     _, keeper = _keeper(
         **{
             "/executions": _listing(_dispatch()),
-            f"/procedures/{PROCEDURE_ID}": _procedure(_move(), _acquire("2bmb:cam1:", "2bmb:m1")),
-            f"/plans/{PLAN_ID}": _plan("tomo_scan"),
+            f"/procedures/{PROCEDURE_ID}": _procedure(_a_set(), _a_run("2bmb:cam1:", "2bmb:m1")),
+            f"/operations/{OPERATION_ID}": _operation("tomo_scan"),
         }
     )
 
@@ -258,9 +258,9 @@ def test_an_assignment_carries_the_procedure_as_this_package_composes_one() -> N
     assert assignment.execution_id == EXECUTION_ID
     assert assignment.procedure.name == "tomography"
     assert list(assignment.procedure.steps) == [
-        Move(record="2bmb:m1", to=0.0),
-        Acquire(
-            plan="tomo_scan",
+        Set(record="2bmb:m1", to=0.0),
+        Run(
+            routine="tomo_scan",
             claim=Claim.over("2bmb:cam1:", "2bmb:m1"),
             parameters={"exposure": 0.1},
         ),
@@ -270,7 +270,7 @@ def test_an_assignment_carries_the_procedure_as_this_package_composes_one() -> N
 def test_the_step_ids_line_up_with_the_steps_they_name() -> None:
     """Positional, which is what `Assignment` promises and what the walk relies on.
 
-    An acquisition carries its step id into the engine's metadata, so a
+    A run carries its step id into the engine's metadata, so a
     pairing off by one would file every run against the wrong step of the
     right execution, which reads as a plausible record rather than as an
     error.
@@ -278,37 +278,37 @@ def test_the_step_ids_line_up_with_the_steps_they_name() -> None:
     _, keeper = _keeper(
         **{
             "/executions": _listing(_dispatch()),
-            f"/procedures/{PROCEDURE_ID}": _procedure(_move(), _acquire()),
-            f"/plans/{PLAN_ID}": _plan(),
+            f"/procedures/{PROCEDURE_ID}": _procedure(_a_set(), _a_run()),
+            f"/operations/{OPERATION_ID}": _operation(),
         }
     )
 
     assignment = keeper.take("2-bm", wait=0.0)
 
     assert assignment is not None
-    assert list(assignment.step_ids) == [MOVE_STEP_ID, ACQUIRE_STEP_ID]
+    assert list(assignment.step_ids) == [SET_STEP_ID, ACQUIRE_STEP_ID]
     assert len(assignment.step_ids) == len(assignment.procedure.steps)
 
 
-def test_a_plan_is_looked_up_once_however_many_procedures_cite_it() -> None:
-    """Nothing renames a plan, so the second lookup could only repeat the first.
+def test_an_operation_is_looked_up_once_however_many_procedures_cite_it() -> None:
+    """Nothing renames an operation, so the second lookup could only repeat the first.
 
     A beamline running one routine all day would otherwise spend a
-    request per acquisition asking the keeper to confirm a name that cannot
+    request per run asking the keeper to confirm a name that cannot
     change.
     """
     http, keeper = _keeper(
         **{
             "/executions": _listing(_dispatch()),
-            f"/procedures/{PROCEDURE_ID}": _procedure(_acquire(), _acquire()),
-            f"/plans/{PLAN_ID}": _plan(),
+            f"/procedures/{PROCEDURE_ID}": _procedure(_a_run(), _a_run()),
+            f"/operations/{OPERATION_ID}": _operation(),
         }
     )
 
     keeper.take("2-bm", wait=0.0)
     keeper.take("2-bm", wait=0.0)
 
-    assert len(http.asked(f"/plans/{PLAN_ID}")) == 1
+    assert len(http.asked(f"/operations/{OPERATION_ID}")) == 1
 
 
 def test_a_scope_this_package_cannot_parse_refuses_the_whole_assignment() -> None:
@@ -323,8 +323,8 @@ def test_a_scope_this_package_cannot_parse_refuses_the_whole_assignment() -> Non
     _, keeper = _keeper(
         **{
             "/executions": _listing(_dispatch()),
-            f"/procedures/{PROCEDURE_ID}": _procedure(_acquire(".")),
-            f"/plans/{PLAN_ID}": _plan(),
+            f"/procedures/{PROCEDURE_ID}": _procedure(_a_run(".")),
+            f"/operations/{OPERATION_ID}": _operation(),
         }
     )
 
@@ -343,9 +343,7 @@ def test_a_step_kind_this_conductor_does_not_know_refuses_the_assignment() -> No
     _, keeper = _keeper(
         **{
             "/executions": _listing(_dispatch()),
-            f"/procedures/{PROCEDURE_ID}": _procedure(
-                {"kind": "transfer", "step_id": MOVE_STEP_ID}
-            ),
+            f"/procedures/{PROCEDURE_ID}": _procedure({"kind": "transfer", "step_id": SET_STEP_ID}),
         }
     )
 
@@ -393,8 +391,8 @@ def test_a_claim_refused_for_any_other_reason_is_raised() -> None:
         ),
         (
             Done(
-                step="acquire tomo_scan",
-                acquired=Acquired(
+                step="run tomo_scan",
+                ran=Ran(
                     cites=Citation(execution_id=EXECUTION_ID, step_id=ACQUIRE_STEP_ID),
                     engine_reference="uid-9",
                     said="success",
@@ -404,15 +402,15 @@ def test_a_claim_refused_for_any_other_reason_is_raised() -> None:
         ),
         (
             Refused(
-                step="acquire", holder="tomography[0]", overlap=frozenset({Scope.record("2bmb:m1")})
+                step="run", holder="tomography[0]", overlap=frozenset({Scope.record("2bmb:m1")})
             ),
             {"index": 2, "outcome": "Refused"},
         ),
         (
-            Broke(step="move", cause="TimeoutError: 2bmb:m1 did not get there"),
+            Broke(step="set", cause="TimeoutError: 2bmb:m1 did not get there"),
             {"index": 2, "outcome": "Broken", "cause": "TimeoutError: 2bmb:m1 did not get there"},
         ),
-        (Skipped(step="acquire"), {"index": 2, "outcome": "Skipped"}),
+        (Skipped(step="run"), {"index": 2, "outcome": "Skipped"}),
     ],
     ids=["done", "done-carrying-a-run", "refused", "broke", "skipped"],
 )
@@ -446,9 +444,7 @@ def test_a_refusal_reaches_keeper_as_a_refusal_and_not_as_its_reason() -> None:
     keeper.report(
         EXECUTION_ID,
         0,
-        Refused(
-            step="acquire", holder="tomography[1]", overlap=frozenset({Scope.record("2bmb:m1")})
-        ),
+        Refused(step="run", holder="tomography[1]", overlap=frozenset({Scope.record("2bmb:m1")})),
     )
 
     body = http.sent[0].json
@@ -487,7 +483,7 @@ def test_every_request_carries_the_token_it_was_configured_with() -> None:
     http, keeper = _keeper(
         **{
             "/executions": _listing(_dispatch()),
-            f"/procedures/{PROCEDURE_ID}": _procedure(_move()),
+            f"/procedures/{PROCEDURE_ID}": _procedure(_a_set()),
             f"/executions/{EXECUTION_ID}/claim": Reply(204),
             f"/executions/{EXECUTION_ID}/end": Reply(204),
         }

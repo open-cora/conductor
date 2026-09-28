@@ -1,7 +1,7 @@
 """The three outward seams, named by what they do rather than by a product.
 
 A seam is a Protocol here and an adapter somewhere else, so which control
-library and which acquisition engine a deployment runs is a choice it
+library and which engine a deployment runs is a choice it
 makes at its entrypoint. That is the same arrangement `apps/reporter` uses
 for a store, and the reason is the same: a beamline runs what it runs, and
 a package that named one would be holding an opinion a deployment owns.
@@ -10,7 +10,7 @@ None of the Protocols carries a Port suffix. Everything in this module is a
 seam, so saying so distinguishes nothing, and `apps/keeper` forbids the
 suffix for that reason.
 
-## Why acquisition returns what the engine said, unmapped
+## Why run returns what the engine said, unmapped
 
 A spike drove four collisions into a real scan and
 every one of them ended `exit_status: "success"`, including a six-point
@@ -50,7 +50,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class Citation:
-    """Which execution and which of its steps an acquisition is running.
+    """Which execution and which of its steps a run is running.
 
     the keeper's own ids, carried out to the engine so that whatever watches
     that engine can say what a run belonged to. A bare RunEngine copies
@@ -77,7 +77,7 @@ class Citation:
 
 
 @dataclass(frozen=True, slots=True)
-class Acquired:
+class Ran:
     """What came back from asking an engine to run something.
 
     `engine_reference` is the name that joins. A reporter watching the
@@ -85,7 +85,7 @@ class Acquired:
     that is what the keeper can be asked for later, and
     `docs/reference/client-contract.md` holds both halves of that
     agreement. It is optional because not every engine has a name to
-    give, and because a plan that opened no run has nothing to be named.
+    give, and because a routine that opened no run has nothing to be named.
 
     `cites` is what the engine's own record says the run belonged to,
     read back out rather than echoed, which is what gives the check below
@@ -95,7 +95,7 @@ class Acquired:
 
     `None` means no keeper ids came back, which happens two ways and both
     are ordinary: a walk outside any dispatch has none to carry, and a
-    plan that opened no run recorded nothing to carry them in.
+    routine that opened no run recorded nothing to carry them in.
     """
 
     cites: Citation | None
@@ -120,12 +120,12 @@ class ReferenceNotCarriedError(RuntimeError):
     the one that did not carry it.
     """
 
-    def __init__(self, *, plan: str, asked: Citation | None, got: Citation | None) -> None:
-        self.plan = plan
+    def __init__(self, *, routine: str, asked: Citation | None, got: Citation | None) -> None:
+        self.routine = routine
         self.asked = asked
         self.got = got
         super().__init__(
-            f"the acquisition of {plan!r} was given {asked} and came back with "
+            f"the run of {routine!r} was given {asked} and came back with "
             f"{got}, so nothing watching that engine can say which step the run was"
         )
 
@@ -134,7 +134,7 @@ class ReferenceNotCarriedError(RuntimeError):
 class Control(Protocol):
     """Reading and writing one record at a time, underneath any engine."""
 
-    def move(self, record: str, value: float) -> None:
+    def set(self, record: str, value: float) -> None:
         """Send a record to a value and return when it is there."""
         ...
 
@@ -144,13 +144,11 @@ class Control(Protocol):
 
 
 @runtime_checkable
-class Acquisition(Protocol):
+class Engine(Protocol):
     """Asking an engine to run a routine, and hearing how it went."""
 
-    def acquire(
-        self, plan: str, parameters: Mapping[str, object], cites: Citation | None
-    ) -> Acquired:
-        """Run a plan, carrying the keeper's ids so the run can be attributed later.
+    def run(self, routine: str, parameters: Mapping[str, object], cites: Citation | None) -> Ran:
+        """Run a routine, carrying the keeper's ids so the run can be attributed later.
 
         `cites` is `None` for a procedure walked outside any dispatch,
         and an adapter given none must write no keeper keys at all rather
@@ -179,7 +177,7 @@ class Assignment:
     across.
 
     The ids are needed even though a step is reported by index, because
-    an acquisition carries them into the engine's own metadata so
+    a run carries them into the engine's own metadata so
     whatever watches that engine can say which step a run belonged to.
     `KEEPER_METADATA_KEYS` in `apps/reporter` is the other half.
     """
@@ -262,7 +260,7 @@ class Keeper(Protocol):
         unambiguous for the life of the record.
 
         This is the driver's account and only the driver's. What the
-        engine says about the run an acquisition opened arrives at the keeper
+        engine says about the run a run opened arrives at the keeper
         from whatever watches that engine, on its own schedule, and the
         two are allowed to disagree.
         """

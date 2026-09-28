@@ -1,4 +1,4 @@
-"""The acquisition seam reads both names back out of what the engine published.
+"""The engine seam reads both names back out of what the engine published.
 
 The engine here is a double, and what it imitates is not guesswork: every
 behaviour it has was measured against a real RunEngine by a spike, which
@@ -17,17 +17,17 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from conductor.adapters.bluesky_acquisition import (
+from conductor.adapters.bluesky_engine import (
     KEEPER_EXECUTION_KEY,
     KEEPER_STEP_KEY,
-    BlueskyAcquisition,
+    BlueskyEngine,
     ManyRunsError,
     PlanRaisedError,
     UnknownPlanError,
 )
 from conductor.claims import Claim
 from conductor.conduct import conduct
-from conductor.procedure import Acquire, Procedure
+from conductor.procedure import Procedure, Run
 from conductor.seams import Citation, ReferenceNotCarriedError
 from tests._fakes import RecordingControl
 
@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 Document = dict[str, Any]
 
 CITES = Citation(execution_id="an-execution", step_id="a-step")
-"""The keeper's ids for one dispatched acquisition, as a driver would pass them."""
+"""The keeper's ids for one dispatched run, as a driver would pass them."""
 
 
 @dataclass(slots=True)
@@ -97,8 +97,8 @@ def _plan(**parameters: object) -> dict[str, object]:
     return dict(parameters)
 
 
-def _adapter(engine: FakeEngine) -> BlueskyAcquisition:
-    return BlueskyAcquisition(engine=engine, plans={"tomo_scan": _plan})
+def _adapter(engine: FakeEngine) -> BlueskyEngine:
+    return BlueskyEngine(engine=engine, plans={"tomo_scan": _plan})
 
 
 def test_the_two_keys_are_spelled_the_way_the_reporter_reads_them() -> None:
@@ -118,7 +118,7 @@ def test_the_two_keys_are_spelled_the_way_the_reporter_reads_them() -> None:
 def test_acquire_puts_keepers_two_ids_in_the_engines_metadata() -> None:
     """Both keys, and nothing else, in the start document."""
     engine = FakeEngine()
-    _adapter(engine).acquire("tomo_scan", {}, CITES)
+    _adapter(engine).run("tomo_scan", {}, CITES)
     _, metadata = engine.calls[0]
     assert metadata == {
         KEEPER_EXECUTION_KEY: "an-execution",
@@ -127,8 +127,8 @@ def test_acquire_puts_keepers_two_ids_in_the_engines_metadata() -> None:
 
 
 def test_acquire_returns_the_engine_uid_as_the_reference_to_join_on() -> None:
-    acquired = _adapter(FakeEngine(uids=("c40e",))).acquire("tomo_scan", {}, CITES)
-    assert acquired.engine_reference == "c40e"
+    ran = _adapter(FakeEngine(uids=("c40e",))).run("tomo_scan", {}, CITES)
+    assert ran.engine_reference == "c40e"
 
 
 def test_acquire_returns_the_ids_the_start_document_carried() -> None:
@@ -137,8 +137,8 @@ def test_acquire_returns_the_ids_the_start_document_carried() -> None:
     Echoing would make `conduct`'s comparison compare a value to itself,
     which passes for every engine including one that recorded nothing.
     """
-    acquired = _adapter(FakeEngine()).acquire("tomo_scan", {}, CITES)
-    assert acquired.cites == CITES
+    ran = _adapter(FakeEngine()).run("tomo_scan", {}, CITES)
+    assert ran.cites == CITES
 
 
 def test_acquire_an_engine_that_dropped_the_reference_answers_with_nothing() -> None:
@@ -148,18 +148,18 @@ def test_acquire_an_engine_that_dropped_the_reference_answers_with_nothing() -> 
     here and this one would still fail, which is the only reason it is
     worth a separate test.
     """
-    acquired = _adapter(FakeEngine(carries=False)).acquire("tomo_scan", {}, CITES)
-    assert acquired.cites is None
+    ran = _adapter(FakeEngine(carries=False)).run("tomo_scan", {}, CITES)
+    assert ran.cites is None
 
 
 def test_acquire_says_what_the_stop_document_said() -> None:
-    acquired = _adapter(FakeEngine(exit_status="abort")).acquire("tomo_scan", {}, CITES)
-    assert acquired.said == "abort"
+    ran = _adapter(FakeEngine(exit_status="abort")).run("tomo_scan", {}, CITES)
+    assert ran.said == "abort"
 
 
 def test_acquire_passes_a_steps_parameters_to_the_plan() -> None:
     engine = FakeEngine()
-    _adapter(engine).acquire("tomo_scan", {"points": 6}, CITES)
+    _adapter(engine).run("tomo_scan", {"points": 6}, CITES)
     routine, _ = engine.calls[0]
     assert routine == {"points": 6}
 
@@ -173,9 +173,9 @@ def test_acquire_an_engine_that_kept_one_key_and_dropped_the_other_answers_with_
     """
     engine = FakeEngine(drops=KEEPER_STEP_KEY)
 
-    acquired = _adapter(engine).acquire("tomo_scan", {}, CITES)
+    ran = _adapter(engine).run("tomo_scan", {}, CITES)
 
-    assert acquired.cites is None
+    assert ran.cites is None
 
 
 def test_acquire_a_plan_that_opened_no_run_has_no_reference_to_join_on() -> None:
@@ -184,8 +184,8 @@ def test_acquire_a_plan_that_opened_no_run_has_no_reference_to_join_on() -> None
     What was passed in comes back, which keeps `conduct`'s check quiet
     about a step that never opened a record for it to look in.
     """
-    acquired = _adapter(FakeEngine(uids=())).acquire("tomo_scan", {}, CITES)
-    assert (acquired.engine_reference, acquired.cites) == (None, CITES)
+    ran = _adapter(FakeEngine(uids=())).run("tomo_scan", {}, CITES)
+    assert (ran.engine_reference, ran.cites) == (None, CITES)
 
 
 def test_acquire_outside_a_dispatch_writes_no_keeper_keys_at_all() -> None:
@@ -196,29 +196,29 @@ def test_acquire_outside_a_dispatch_writes_no_keeper_keys_at_all() -> None:
     """
     engine = FakeEngine()
 
-    acquired = _adapter(engine).acquire("tomo_scan", {}, None)
+    ran = _adapter(engine).run("tomo_scan", {}, None)
 
     assert engine.calls[0][1] == {}
-    assert acquired.cites is None
+    assert ran.cites is None
 
 
 def test_acquire_a_plan_that_opened_two_runs_is_refused() -> None:
     engine = FakeEngine(uids=("first", "second"))
     with pytest.raises(ManyRunsError) as refusal:
-        _adapter(engine).acquire("tomo_scan", {}, CITES)
+        _adapter(engine).run("tomo_scan", {}, CITES)
     assert refusal.value.uids == ("first", "second")
 
 
 def test_acquire_a_plan_this_deployment_was_not_given_is_refused() -> None:
     with pytest.raises(UnknownPlanError) as refusal:
-        _adapter(FakeEngine()).acquire("fly_scan", {}, CITES)
+        _adapter(FakeEngine()).run("fly_scan", {}, CITES)
     assert refusal.value.known == ("tomo_scan",)
 
 
 def test_acquire_a_plan_that_raised_after_opening_names_the_run_it_opened() -> None:
     engine = FakeEngine(uids=("c40e",), raises=RuntimeError("the detector fell over"))
     with pytest.raises(PlanRaisedError) as broke:
-        _adapter(engine).acquire("tomo_scan", {}, CITES)
+        _adapter(engine).run("tomo_scan", {}, CITES)
     assert broke.value.uid == "c40e"
     assert "the detector fell over" in str(broke.value)
 
@@ -227,20 +227,20 @@ def test_acquire_a_plan_that_raised_before_opening_is_left_alone() -> None:
     """Nothing to add, so nothing is wrapped and the original type survives."""
     engine = FakeEngine(uids=(), raises=TimeoutError("the engine never started"))
     with pytest.raises(TimeoutError):
-        _adapter(engine).acquire("tomo_scan", {}, CITES)
+        _adapter(engine).run("tomo_scan", {}, CITES)
 
 
 def test_acquire_unsubscribes_from_an_engine_whose_plan_raised() -> None:
     """A subscription left behind would collect every later step's documents."""
     engine = FakeEngine(raises=RuntimeError("stopped"))
     with pytest.raises(Exception, match="stopped"):
-        _adapter(engine).acquire("tomo_scan", {}, CITES)
+        _adapter(engine).run("tomo_scan", {}, CITES)
     assert engine.live == set()
 
 
 def test_acquire_unsubscribes_from_an_engine_whose_plan_finished() -> None:
     engine = FakeEngine()
-    _adapter(engine).acquire("tomo_scan", {}, CITES)
+    _adapter(engine).run("tomo_scan", {}, CITES)
     assert engine.live == set()
 
 
@@ -248,12 +248,12 @@ def test_walk_over_an_engine_that_drops_keepers_ids_refuses_the_step() -> None:
     """The adapter reports, `conduct` judges, and this is the two together."""
     procedure = Procedure(
         name="scan_once",
-        steps=(Acquire(plan="tomo_scan", claim=Claim.over("2bmb:m1")),),
+        steps=(Run(routine="tomo_scan", claim=Claim.over("2bmb:m1")),),
     )
     walk = conduct(
         procedure,
         control=RecordingControl(),
-        acquisition=_adapter(FakeEngine(carries=False)),
+        engine=_adapter(FakeEngine(carries=False)),
         cites=[CITES],
     )
     assert not walk.finished
@@ -267,14 +267,10 @@ def test_the_adapter_imports_no_outside_library() -> None:
     Every other adapter here imports the library of one outside system.
     This one gets a RunEngine handed to it, so a `bluesky` import
     appearing later would be a real change rather than a tidy-up, and
-    would quietly make composing an acquisition need the package.
+    would quietly make composing a run need the package.
     """
     module = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "conductor"
-        / "adapters"
-        / "bluesky_acquisition.py"
+        Path(__file__).resolve().parents[1] / "src" / "conductor" / "adapters" / "bluesky_engine.py"
     )
     roots: set[str] = set()
     for node in ast.walk(ast.parse(module.read_text(encoding="utf-8"))):
@@ -283,4 +279,4 @@ def test_the_adapter_imports_no_outside_library() -> None:
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             roots.add(node.module.split(".")[0])
     outsiders = sorted(r for r in roots if r not in sys.stdlib_module_names and r != "conductor")
-    assert not outsiders, f"bluesky_acquisition.py now imports {outsiders}"
+    assert not outsiders, f"bluesky_engine.py now imports {outsiders}"

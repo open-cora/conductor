@@ -1,5 +1,5 @@
 site_name: Conductor
-site_description: Walks a procedure across a beamline, one step at a time.
+site_description: Runs the work at the beamline.
 repo_url: https://github.com/open-cora/conductor
 repo_name: open-cora/conductor
 edit_uri: ""
@@ -58,8 +58,13 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Reference:
+  - Running one: running.md
+  - Understanding it:
       - Conducting: conducting.md
-      - Client contract: client-contract.md
-      - Conventions: conventions.md
+      - Architecture: architecture.md
+      - Contract: client-contract.md
       - Glossary: glossary.md
+  - Changing it:
+      - Naming: naming.md
+      - Conventions: conventions.md
+      - Workflow: workflow.md

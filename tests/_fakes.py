@@ -1,7 +1,7 @@
 """Seams that keep what they were asked, so a walk can be checked.
 
 None of them talks to anything. What a real control seam and a real
-acquisition engine do to a beamline is measured in a spike,
+engine do to a beamline is measured in a spike,
 and nothing in this package's tests needs a beamline to check that a
 procedure walked the way it was written.
 """
@@ -12,14 +12,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from conductor.seams import Acquired, Citation
+from conductor.seams import Citation, Ran
 
 if TYPE_CHECKING:
     from conductor.outcomes import Outcome
     from conductor.seams import Assignment
 
 Asked = tuple[str, Mapping[str, object], "Citation | None"]
-"""One request an engine received: the plan, its parameters, the keeper's ids.
+"""One request an engine received: the routine, its parameters, the keeper's ids.
 
 A runtime alias rather than an annotation, because the factory below
 builds a parametrised list from it and a name only the type checker can
@@ -35,7 +35,7 @@ class RecordingControl:
     positions: dict[str, float] = field(default_factory=dict[str, float])
     breaks_on: str | None = None
 
-    def move(self, record: str, value: float) -> None:
+    def set(self, record: str, value: float) -> None:
         if self.breaks_on is not None and record == self.breaks_on:
             raise TimeoutError(f"{record} did not get there")
         self.moves.append((record, value))
@@ -46,8 +46,8 @@ class RecordingControl:
 
 
 @dataclass(slots=True)
-class RecordingAcquisition:
-    """Remembers every plan it was asked for, with the ids it carried."""
+class RecordingEngine:
+    """Remembers every routine it was asked for, with the ids it carried."""
 
     asked: list[Asked] = field(default_factory=list[Asked])
     says: str = "success"
@@ -55,15 +55,13 @@ class RecordingAcquisition:
     answers_with: Citation | None = None
     """A citation to return instead of the one given, for the engine that drops them."""
 
-    def acquire(
-        self, plan: str, parameters: Mapping[str, object], cites: Citation | None
-    ) -> Acquired:
-        if self.breaks_on is not None and plan == self.breaks_on:
-            raise RuntimeError(f"the engine refused {plan}")
-        self.asked.append((plan, parameters, cites))
-        return Acquired(
+    def run(self, routine: str, parameters: Mapping[str, object], cites: Citation | None) -> Ran:
+        if self.breaks_on is not None and routine == self.breaks_on:
+            raise RuntimeError(f"the engine refused {routine}")
+        self.asked.append((routine, parameters, cites))
+        return Ran(
             cites=self.answers_with if self.answers_with is not None else cites,
-            engine_reference=f"engine-uid-for-{plan}",
+            engine_reference=f"engine-uid-for-{routine}",
             said=self.says,
         )
 

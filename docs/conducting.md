@@ -4,7 +4,7 @@
 
 This project runs as a process at one beamline. It asks the keeper what has been dispatched there, claims one execution, walks it reporting each step as the step ends, and asks again. Nothing dispatches to it and it listens on nothing: every call goes out, over the same HTTP surface every other client of the keeper uses.
 
-That is right for a library a person runs from a terminal and wrong for the direction this system is going. The keeper is to be an execution path rather than only a record of one: an actor puts a proposal forward, and what runs it is a conductor rather than the actor's own connection to an engine. The reason is the engineless beamline. A conductor drives hardware through `Control`, which needs no engine at all, so a procedure walks at a beamline that has never heard of an acquisition engine. Routing conducted work through an engine would make the capability depend on which software a facility adopted.
+That is right for a library a person runs from a terminal and wrong for the direction this system is going. The keeper is to be an execution path rather than only a record of one: an actor puts a proposal forward, and what runs it is a conductor rather than the actor's own connection to an engine. The reason is the engineless beamline. A conductor drives hardware through `Control`, which needs no engine at all, so a procedure walks at a beamline that has never heard of an engine. Routing conducted work through an engine would make the capability depend on which software a facility adopted.
 
 A walk therefore has to outlive the session that asked for it. This page says what that service promises and, more importantly, what it refuses to promise, because the interesting limits here are measured rather than argued.
 
@@ -54,22 +54,20 @@ The reason to prefer closing over resuming is not only cost. A walk stops at its
 
 ## Where a conducted walk is recorded
 
-**This section used to describe two nested records and it now describes one.** A walk's steps and the engine runs they caused were a Walk aggregate and a Run aggregate, and the keeper held both. The Run aggregate has been retired: an acquisition step and a run turned out to be the same fact in two vocabularies once the keeper started composing the work, and most steps cause no engine run at all. See Execution.
-
-So there is one record, and the engine's account of an acquisition hangs off the step rather than beside it:
+One record, and the engine's account of a run hangs off the step rather than beside it:
 
 ```
    Execution         the procedure the keeper dispatched
-     step            move, set, acquire
+     step            set, run
        outcome       what the conductor observed
-       engine state  what the engine said, on an acquisition only
+       engine state  what the engine said, on a run only
 ```
 
-A move drives a motor and opens nothing, so its engine state stays empty for the life of the record. That asymmetry is why the collapse went step-ward rather than run-ward.
+A set drives a motor and opens nothing, so its engine state stays empty for the life of the record. That asymmetry is why the collapse went step-ward rather than run-ward.
 
-**A reserved table of driving verbs used to sit behind this**, pairing each reporting verb with the one a driving surface would use. It is gone, and the question was answered rather than dropped: the keeper dispatches a whole procedure, so the driving verb is `dispatch_execution`, it exists, and it is the only one. Execution records the removal.
+**There is one driving verb and it is `dispatch_execution`.** The keeper dispatches a whole procedure rather than a step at a time, so there is no per-step driving verb for this page to pair against each reporting one.
 
-**A step's record of what an engine did is a weaker statement than the step's own record.** A conductor reports an acquisition the moment the engine returns; whatever watches that engine relays the engine's view on its own schedule, as a different process. Nothing orders the two, so a step can be `Done` with no engine state at all, and the two can disagree once both arrive. They are two fields rather than one for exactly that reason.
+**A step's record of what an engine did is a weaker statement than the step's own record.** A conductor reports a run the moment the engine returns; whatever watches that engine relays the engine's view on its own schedule, as a different process. Nothing orders the two, so a step can be `Done` with no engine state at all, and the two can disagree once both arrive. They are two fields rather than one for exactly that reason.
 
 The engine's name for the run travels on the step as `engine_reference`, which is what [Client contract](client-contract.md) says such a reference is: a correlation hint rather than a key anything is checked against. No amount of ordering the writes fixes the gap, because the two writes come from two clients that do not know about each other.
 
@@ -96,13 +94,13 @@ Through a seam, beside the two that drive hardware. The Protocol is in `conducto
 
 ```
    Control        reading and writing one record at a time
-   Acquisition    asking an engine to run a routine
+   Engine         asking an engine to run a routine
    recording      telling the keeper what this walk is doing
 ```
 
 The conductor's core names no outside system: `claims`, `procedure`, `seams`, `conduct` and `outcomes` import the standard library and each other, and a test in that package holds them to it. A direct dependency on the keeper would break that rule for the one client that most needs to stay honest about it.
 
-A seam keeps the core pure and leaves the choice to a deployment, which is the same arrangement `Control` and `Acquisition` already use. It also gives the open question about degraded operation a shape rather than an answer: whether a conductor may walk while the keeper is unreachable becomes a question about which adapter a beamline installs, not a question about how the walk is built.
+A seam keeps the core pure and leaves the choice to a deployment, which is the same arrangement `Control` and `Engine` already use. It also gives the open question about degraded operation a shape rather than an answer: whether a conductor may walk while the keeper is unreachable becomes a question about which adapter a beamline installs, not a question about how the walk is built.
 
 ## Why the ledger does not move
 
@@ -116,7 +114,7 @@ That is why the expiry rule above matters so much. A lease that expired into "fr
 
 **That a step worked.** Unchanged from today. `Done` means the seam returned without raising, and every corrupted scan in a spike came back reporting success. A record that said otherwise would be the overclaim this tree refuses everywhere else.
 
-**That a walk can be stopped while a step is running.** There is no interruption point inside a step. `EpicsControl` waits for arrival in a poll loop bounded by its settle time, and `BlueskyAcquisition` runs the engine in the calling thread. So an abort request lands between steps, and a step already running finishes or times out on its own terms. Interrupting one needs a worker and an engine-side abort, which is the same conclusion the bound on an acquisition step reached from the other direction.
+**That a walk can be stopped while a step is running.** There is no interruption point inside a step. `EpicsControl` waits for arrival in a poll loop bounded by its settle time, and `BlueskyEngine` runs the engine in the calling thread. So an abort request lands between steps, and a step already running finishes or times out on its own terms. Interrupting one needs a worker and an engine-side abort, which is the same conclusion the bound on a run step reached from the other direction.
 
 **That the keeper knows about writers that do not go through it.** A lease arbitrates conducted work against other conducted work. A scientist at their own session on the same beamline is invisible to it, as they are to the in-process ledger today.
 
@@ -140,4 +138,4 @@ The threshold is the open part. A tomography scan and an alignment differ by ord
 
 **Whether a conductor may walk while the keeper is unreachable.** Named as a seam question above and not answered. The objection to answering it yes is that a walk recorded in two places is a walk with two versions of what happened.
 
-**How a taken-up proposal becomes a procedure.** A proposal cites a plan and carries parameters; a procedure declares claims and bounds per step. Nothing turns one into the other, and the claim a proposed step needs has to come from somewhere.
+**How a taken-up proposal becomes a procedure.** A proposal cites an operation and carries parameters; a procedure declares claims and bounds per step. Nothing turns one into the other, and the claim a proposed step needs has to come from somewhere.

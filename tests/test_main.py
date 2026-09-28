@@ -2,7 +2,7 @@
 
 The loop itself is checked in `test_intake.py` against doubles. What is
 left here is the part that turns a file into seams: refusing a
-configuration before any hardware moves, and building the acquisition
+configuration before any hardware moves, and building the run
 seam a deployment named.
 
 Nothing below starts the loop. `main` past its configuration checks is
@@ -16,13 +16,13 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from conductor.__main__ import NoEngine, NoEngineError, acquisition_for, main
+from conductor.__main__ import NoEngine, NoEngineError, engine_for, main
 from conductor.claims import Claim
 from conductor.conduct import conduct
 from conductor.config import ConductorConfig, ConfigError, from_mapping
 from conductor.outcomes import Broke, Done
-from conductor.procedure import Acquire, Move, Procedure
-from tests._fakes import RecordingAcquisition, RecordingControl
+from conductor.procedure import Procedure, Run, Set
+from tests._fakes import RecordingControl, RecordingEngine
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -41,7 +41,7 @@ def _config(profile: str | None = None) -> ConductorConfig:
         beamline="2-bm",
         base_url="https://keeper.example",
         token="t",
-        acquisition_profile=profile,
+        engine_profile=profile,
     )
 
 
@@ -57,14 +57,14 @@ def test_a_configuration_that_cannot_be_read_stops_before_anything_is_built(
 def test_a_profile_that_will_not_import_stops_at_startup_rather_than_mid_procedure(
     tmp_path: Path,
 ) -> None:
-    """A conductor that deferred this would refuse the first acquisition of the day.
+    """A conductor that deferred this would refuse the first run of the day.
 
     By then a beamline has moved motors and is part way through a
     procedure, and the reason is a typo somebody could have been shown
     before anything started.
     """
     path = tmp_path / "conductor.toml"
-    path.write_text(f'{COMPLETE}\n[acquisition]\nprofile = "no.such.module:build"\n', "utf-8")
+    path.write_text(f'{COMPLETE}\n[run]\nprofile = "no.such.module:build"\n', "utf-8")
 
     assert main(["--config", str(path)]) == 2
 
@@ -75,7 +75,7 @@ def test_a_beamline_that_named_no_engine_gets_one_that_refuses() -> None:
     An object means everything above here has one shape to handle, and
     the refusal arrives where an engine's own refusal would.
     """
-    assert isinstance(acquisition_for(_config()), NoEngine)
+    assert isinstance(engine_for(_config()), NoEngine)
 
 
 def test_an_acquisition_with_no_engine_breaks_that_step_and_not_the_procedure() -> None:
@@ -90,12 +90,12 @@ def test_an_acquisition_with_no_engine_breaks_that_step_and_not_the_procedure() 
     procedure = Procedure(
         name="two moves and a scan",
         steps=(
-            Move(record="2bmb:m1", to=1.0),
-            Acquire(plan="tomo_scan", claim=Claim.over("2bmb:cam1:")),
+            Set(record="2bmb:m1", to=1.0),
+            Run(routine="tomo_scan", claim=Claim.over("2bmb:cam1:")),
         ),
     )
 
-    walk = conduct(procedure, control=control, acquisition=acquisition_for(_config()))
+    walk = conduct(procedure, control=control, engine=engine_for(_config()))
 
     assert isinstance(walk.outcomes[0], Done)
     assert control.moves == [("2bmb:m1", 1.0)]
@@ -108,9 +108,9 @@ def test_an_acquisition_with_no_engine_breaks_that_step_and_not_the_procedure() 
 def test_asking_a_refusing_seam_directly_says_what_to_configure() -> None:
     """The message is read by whoever is on shift, not by a developer."""
     with pytest.raises(NoEngineError) as refusal:
-        NoEngine().acquire("tomo_scan", {}, None)
+        NoEngine().run("tomo_scan", {}, None)
 
-    assert "[acquisition]" in str(refusal.value)
+    assert "[run]" in str(refusal.value)
 
 
 def test_a_named_profile_is_imported_and_called_to_build_the_seam() -> None:
@@ -120,9 +120,9 @@ def test_a_named_profile_is_imported_and_called_to_build_the_seam() -> None:
     same shape a beamline's startup module has: something importable that
     returns a seam.
     """
-    built = acquisition_for(_config("tests._fakes:RecordingAcquisition"))
+    built = engine_for(_config("tests._fakes:RecordingEngine"))
 
-    assert isinstance(built, RecordingAcquisition)
+    assert isinstance(built, RecordingEngine)
 
 
 @pytest.mark.parametrize(
@@ -136,7 +136,7 @@ def test_a_named_profile_is_imported_and_called_to_build_the_seam() -> None:
 )
 def test_a_profile_that_cannot_build_a_seam_is_refused_by_name(profile: str, named: str) -> None:
     with pytest.raises(ConfigError) as problem:
-        acquisition_for(_config(profile))
+        engine_for(_config(profile))
 
     assert named in str(problem.value)
 
@@ -152,7 +152,7 @@ def test_a_profile_missing_its_separator_is_refused_where_the_format_is_known() 
             {
                 "beamline": "2-bm",
                 "keeper": {"base_url": "https://a.example", "token": "t"},
-                "acquisition": {"profile": "beamline_2bm.startup"},
+                "run": {"profile": "beamline_2bm.startup"},
             }
         )
 
@@ -165,8 +165,8 @@ def test_an_acquisition_table_that_is_not_a_table_is_refused() -> None:
             {
                 "beamline": "2-bm",
                 "keeper": {"base_url": "https://a.example", "token": "t"},
-                "acquisition": "beamline_2bm.startup:build",
+                "run": "beamline_2bm.startup:build",
             }
         )
 
-    assert "acquisition" in str(problem.value)
+    assert "run" in str(problem.value)

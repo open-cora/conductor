@@ -17,25 +17,25 @@ them.
 `EpicsControl` is built from nothing: it needs a few clocks and it has
 defaults for all of them, so naming the class is enough.
 
-An acquisition seam cannot work that way. `BlueskyAcquisition` takes a
+An engine seam cannot work that way. `BlueskyEngine` takes a
 live RunEngine and a map from plan names to the callables that build
 them, and a configuration file can hold neither. So the deployment writes
 something that builds them and configures where it is, which is the
 arrangement an IPython startup profile already has at every beamline
 running bluesky.
 
-With no such profile configured, acquisitions are refused one at a time
+With no such profile configured, runs are refused one at a time
 rather than at startup. A beamline whose procedures only move records
 never reaches one, which is exactly the engineless case
 `docs/reference/conducting.md` gives as the reason conducted work does
 not run through an engine.
 
-## Why a refused acquisition is reported as a break
+## Why a refused run is reported as a break
 
 `conduct` turns a seam that raised into `Broke`, which means the seam
 raised, and that is what happened: this conductor was asked for an engine
 it does not have. The alternative, refusing the whole assignment before
-walking it, would leave the moves before the acquisition unwalked and the
+walking it, would leave the moves before the run unwalked and the
 record saying nothing about how far it got.
 
 ## Stopping
@@ -71,7 +71,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
     from types import FrameType
 
-    from conductor.seams import Acquired, Acquisition, Citation
+    from conductor.seams import Citation, Engine, Ran
 
 REQUEST_TIMEOUT_SECONDS = 10.0
 """How long a request that is not a long poll may take before it counts as lost.
@@ -86,7 +86,7 @@ is why this one can be short.
 
 
 class NoEngineError(RuntimeError):
-    """A procedure asked for a plan at a beamline with nothing to run it.
+    """A procedure asked for a routine at a beamline with nothing to run it.
 
     Raised per step rather than at startup, so the moves around it still
     run and the record still says how far the procedure got.
@@ -95,7 +95,7 @@ class NoEngineError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class NoEngine:
-    """The acquisition seam of a beamline that configured none.
+    """The engine seam of a beamline that configured none.
 
     An object rather than a `None` the loop checks for, so that nothing
     above here has two shapes to handle. `conduct` turns what this raises
@@ -103,13 +103,11 @@ class NoEngine:
     seam refused.
     """
 
-    def acquire(
-        self, plan: str, parameters: Mapping[str, object], cites: Citation | None
-    ) -> Acquired:
+    def run(self, routine: str, parameters: Mapping[str, object], cites: Citation | None) -> Ran:
         _ = parameters, cites
         raise NoEngineError(
-            f"this conductor was asked to run {plan!r} and has no acquisition engine. "
-            "Name one under [acquisition] in the configuration."
+            f"this conductor was asked to run {routine!r} and has no engine. "
+            "Name one under [run] in the configuration."
         )
 
 
@@ -118,7 +116,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parse(argv)
     try:
         config = load(arguments.config)
-        acquisition = acquisition_for(config)
+        engine = engine_for(config)
     except ConfigError as problem:
         print(f"configuration: {problem}", file=sys.stderr)
         return 2
@@ -134,7 +132,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 HttpKeeper(http=http, base_url=config.base_url, token=config.token),
                 config.beamline,
                 control=EpicsControl(),
-                acquisition=acquisition,
+                engine=engine,
                 wait=arguments.wait,
                 keep_going=keep_going,
             )
@@ -145,45 +143,44 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-def acquisition_for(config: ConductorConfig) -> Acquisition:
+def engine_for(config: ConductorConfig) -> Engine:
     """Build the engine seam a configuration named, or one that refuses.
 
-    The import happens at startup rather than at the first acquisition,
+    The import happens at startup rather than at the first run,
     so a profile that is not importable is a message before any hardware
     moves rather than a broken step in the middle of a procedure.
 
     What the named attribute returns is cast rather than checked.
-    `Acquisition` is a Protocol, so the check that matters is structural
+    `Engine` is a Protocol, so the check that matters is structural
     and the deployment gets it from its own type checker. A runtime
-    `isinstance` would confirm only that a method called `acquire`
+    `isinstance` would confirm only that a method called `run`
     exists, which is the part a typo does not get wrong, and would refuse
     a perfectly good seam built by something older than this Protocol.
     """
-    if config.acquisition_profile is None:
+    if config.engine_profile is None:
         return NoEngine()
 
-    module_name, _, attribute = config.acquisition_profile.partition(":")
+    module_name, _, attribute = config.engine_profile.partition(":")
     try:
         module = importlib.import_module(module_name)
     except ImportError as missing:
         raise ConfigError(
-            f"acquisition.profile names the module {module_name!r}, which will not "
-            f"import: {missing}"
+            f"run.profile names the module {module_name!r}, which will not import: {missing}"
         ) from missing
 
     build = getattr(module, attribute, None)
     if build is None:
         raise ConfigError(
-            f"acquisition.profile names {attribute!r} in {module_name!r}, and there is "
+            f"run.profile names {attribute!r} in {module_name!r}, and there is "
             "nothing by that name there"
         )
     if not callable(build):
         raise ConfigError(
-            f"acquisition.profile names {attribute!r} in {module_name!r}, which is not "
-            "callable. It should be something that returns an acquisition seam."
+            f"run.profile names {attribute!r} in {module_name!r}, which is not "
+            "callable. It should be something that returns an engine seam."
         )
 
-    return cast("Acquisition", build())
+    return cast("Engine", build())
 
 
 def _parse(argv: Sequence[str] | None) -> argparse.Namespace:

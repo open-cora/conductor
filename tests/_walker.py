@@ -20,13 +20,13 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from conductor import Move, Procedure, conduct
+from conductor import Procedure, Set, conduct
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from conductor.outcomes import Outcome
-    from conductor.seams import Acquired, Citation
+    from conductor.seams import Citation, Ran
 
 BLOCKS_ON = "2bmb:m3"
 """The record the third step moves, and the one nothing ever returns from."""
@@ -69,7 +69,7 @@ class JournalRecording:
 class BlockingControl:
     """Moves everything at once, except the one record it never leaves."""
 
-    def move(self, record: str, value: float) -> None:
+    def set(self, record: str, value: float) -> None:
         while record == BLOCKS_ON:
             time.sleep(0.05)
 
@@ -77,13 +77,11 @@ class BlockingControl:
         return 0.0
 
 
-class UnusedAcquisition:
-    """The procedure below has no acquisition step, and this proves it."""
+class UnusedEngine:
+    """The procedure below has no run step, and this proves it."""
 
-    def acquire(
-        self, plan: str, parameters: Mapping[str, object], cites: Citation | None
-    ) -> Acquired:
-        raise AssertionError("the procedure walked here has no acquisition step")
+    def run(self, routine: str, parameters: Mapping[str, object], cites: Citation | None) -> Ran:
+        raise AssertionError("the procedure walked here has no run step")
 
 
 def main() -> None:
@@ -91,13 +89,13 @@ def main() -> None:
     records = ["2bmb:m1", "2bmb:m2", BLOCKS_ON, "2bmb:m4", "2bmb:m5"]
     procedure = Procedure(
         name="walk_until_killed",
-        steps=tuple(Move(record=record, to=1.0) for record in records),
+        steps=tuple(Set(record=record, to=1.0) for record in records),
     )
     assert len(procedure.steps) == STEPS
     conduct(
         procedure,
         control=BlockingControl(),
-        acquisition=UnusedAcquisition(),
+        engine=UnusedEngine(),
         reporting=JournalRecording(journal),
     )
 

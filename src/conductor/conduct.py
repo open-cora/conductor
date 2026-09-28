@@ -47,14 +47,14 @@ from typing import TYPE_CHECKING
 
 from conductor.claims import ClaimConflictError, Ledger
 from conductor.outcomes import Broke, Done, Outcome, Refused, Skipped
-from conductor.procedure import Acquire, Move, Procedure
+from conductor.procedure import Procedure, Run, Set
 from conductor.seams import ReferenceNotCarriedError
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from conductor.procedure import Step
-    from conductor.seams import Acquisition, Citation, Control, Keeper, Reporting
+    from conductor.seams import Citation, Control, Engine, Keeper, Reporting
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,7 +93,7 @@ class Walk:
 
 @dataclass(frozen=True, slots=True)
 class _BoundToOneExecution:
-    """An `Keeper` seam and the execution a walk is reporting against.
+    """A `Keeper` seam and the execution a walk is reporting against.
 
     The adapter half of `Reporting`, and the only place the execution id
     is remembered. Everything below it takes an index and nothing takes
@@ -147,7 +147,7 @@ def conduct(
     procedure: Procedure,
     *,
     control: Control,
-    acquisition: Acquisition,
+    engine: Engine,
     ledger: Ledger | None = None,
     reporting: Reporting | None = None,
     cites: Sequence[Citation] | None = None,
@@ -170,7 +170,7 @@ def conduct(
     anything is asked to drive them.
 
     `cites` is the keeper's ids for these steps, one per step and in their
-    order, which each acquisition carries into the engine's own record.
+    order, which each run carries into the engine's own record.
     A walk given none writes no keeper keys, which is what a procedure run
     from a terminal should do: whatever watches that engine then sees a
     hand-run scan, because that is what it was.
@@ -204,7 +204,7 @@ def conduct(
                 holder=f"{procedure.name}[{index}]",
                 book=book,
                 control=control,
-                acquisition=acquisition,
+                engine=engine,
                 cites=None if cites is None else cites[index],
             )
             stopped = not isinstance(outcome, Done)
@@ -223,7 +223,7 @@ def _attempt(
     holder: str,
     book: Ledger,
     control: Control,
-    acquisition: Acquisition,
+    engine: Engine,
     cites: Citation | None,
 ) -> Outcome:
     """Run one step under its claim and turn whatever happened into a word.
@@ -235,7 +235,7 @@ def _attempt(
     """
     try:
         with book.granted(holder, step.claim):
-            return _perform(step, described, control, acquisition, cites)
+            return _perform(step, described, control, engine, cites)
     except ClaimConflictError as conflict:
         return Refused(step=described, holder=conflict.holder, overlap=conflict.overlap)
     except Exception as exc:
@@ -246,16 +246,16 @@ def _perform(
     step: Step,
     described: str,
     control: Control,
-    acquisition: Acquisition,
+    engine: Engine,
     cites: Citation | None,
 ) -> Outcome:
     """Run one step through whichever seam it belongs to."""
     match step:
-        case Move(record=record, to=to):
-            control.move(record, to)
+        case Set(record=record, to=to):
+            control.set(record, to)
             return Done(step=described)
-        case Acquire(plan=plan, parameters=parameters):
-            acquired = acquisition.acquire(plan, parameters, cites)
-            if acquired.cites != cites:
-                raise ReferenceNotCarriedError(plan=plan, asked=cites, got=acquired.cites)
-            return Done(step=described, acquired=acquired)
+        case Run(routine=routine, parameters=parameters):
+            ran = engine.run(routine, parameters, cites)
+            if ran.cites != cites:
+                raise ReferenceNotCarriedError(routine=routine, asked=cites, got=ran.cites)
+            return Done(step=described, ran=ran)

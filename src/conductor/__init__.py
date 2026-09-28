@@ -27,26 +27,23 @@ from conductor.conduct import Walk, conduct
 from conductor.intake import serve
 from conductor.outcomes import Broke, Done, Outcome, Refused, Skipped
 from conductor.procedure import (
-    Acquire,
     InvalidProcedureError,
-    Move,
     Procedure,
+    Run,
+    Set,
     Step,
 )
 from conductor.seams import (
-    Acquired,
-    Acquisition,
     Assignment,
     Citation,
     Control,
+    Engine,
     Keeper,
+    Ran,
     Reporting,
 )
 
 __all__ = [
-    "Acquire",
-    "Acquired",
-    "Acquisition",
     "Assignment",
     "Broke",
     "Citation",
@@ -54,16 +51,19 @@ __all__ = [
     "ClaimConflictError",
     "Control",
     "Done",
+    "Engine",
     "InvalidProcedureError",
     "InvalidScopeError",
     "Keeper",
     "Ledger",
-    "Move",
     "Outcome",
     "Procedure",
+    "Ran",
     "Refused",
     "Reporting",
+    "Run",
     "Scope",
+    "Set",
     "Skipped",
     "Step",
     "Walk",

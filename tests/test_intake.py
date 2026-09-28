@@ -16,9 +16,9 @@ from typing import TYPE_CHECKING
 from conductor.claims import Claim, Ledger
 from conductor.intake import serve
 from conductor.outcomes import Done, Refused
-from conductor.procedure import Acquire, Move, Procedure
+from conductor.procedure import Procedure, Run, Set
 from conductor.seams import Assignment
-from tests._fakes import CollectingKeeper, RecordingAcquisition, RecordingControl
+from tests._fakes import CollectingKeeper, RecordingControl, RecordingEngine
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -39,8 +39,8 @@ def _assignment(execution_id: str = EXECUTION, *, name: str = "tomography") -> A
         procedure=Procedure(
             name=name,
             steps=(
-                Move(record="2bmb:m1", to=1.0),
-                Acquire(plan="tomo_scan", claim=Claim.over("2bmb:cam1:")),
+                Set(record="2bmb:m1", to=1.0),
+                Run(routine="tomo_scan", claim=Claim.over("2bmb:cam1:")),
             ),
         ),
         step_ids=("step-one", "step-two"),
@@ -54,14 +54,14 @@ def _serve(
     ledger: Ledger | None = None,
     slept: list[float] | None = None,
     said: list[str] | None = None,
-) -> tuple[RecordingControl, RecordingAcquisition]:
+) -> tuple[RecordingControl, RecordingEngine]:
     control = RecordingControl()
-    acquisition = RecordingAcquisition()
+    engine = RecordingEngine()
     serve(
         keeper,
         BEAMLINE,
         control=control,
-        acquisition=acquisition,
+        engine=engine,
         wait=7.0,
         backoff=3.0,
         ledger=ledger,
@@ -69,7 +69,7 @@ def _serve(
         pause=(slept if slept is not None else []).append,
         note=(said if said is not None else []).append,
     )
-    return control, acquisition
+    return control, engine
 
 
 def test_an_idle_beamline_asks_again_and_claims_nothing() -> None:
@@ -93,11 +93,11 @@ def test_work_dispatched_here_is_claimed_and_then_walked() -> None:
     """The whole point, in one turn."""
     keeper = CollectingKeeper(waiting=[_assignment()])
 
-    control, acquisition = _serve(keeper)
+    control, engine = _serve(keeper)
 
     assert keeper.claimed == [EXECUTION]
     assert control.moves == [("2bmb:m1", 1.0)]
-    assert [plan for plan, _, _ in acquisition.asked] == ["tomo_scan"]
+    assert [routine for routine, _, _ in engine.asked] == ["tomo_scan"]
 
 
 def test_every_step_is_reported_against_the_execution_that_was_claimed() -> None:
@@ -127,11 +127,11 @@ def test_an_execution_another_conductor_claimed_first_is_not_walked() -> None:
     """
     keeper = CollectingKeeper(waiting=[_assignment()], grants_claims=False)
 
-    control, acquisition = _serve(keeper)
+    control, engine = _serve(keeper)
 
     assert keeper.claimed == [EXECUTION]
     assert control.moves == []
-    assert acquisition.asked == []
+    assert engine.asked == []
     assert keeper.reported == []
 
 
@@ -205,7 +205,7 @@ def test_the_ledger_it_is_given_is_the_one_the_walk_holds_claims_in() -> None:
     walk consults.
     """
     book = Ledger()
-    book.acquire("something-else", Claim.over("2bmb:m1"))
+    book.run("something-else", Claim.over("2bmb:m1"))
     keeper = CollectingKeeper(waiting=[_assignment()])
 
     control, _ = _serve(keeper, ledger=book)
