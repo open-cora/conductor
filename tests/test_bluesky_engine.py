@@ -1,10 +1,9 @@
 """The engine seam reads both names back out of what the engine published.
 
-The engine here is a double, and what it imitates is not guesswork: every
-behaviour it has was measured against a real RunEngine by a spike, which
-subscribed to a scan, read the run uid and the exit status off the
-documents, and confirmed that keyword arguments of the call arrive in the
-start document unchanged.
+The engine here is a double, and what it imitates is a real RunEngine:
+a subscriber reads the run uid and the exit status off the documents, and
+the keyword arguments of the call arrive in the start document
+unchanged.
 """
 
 from __future__ import annotations
@@ -29,7 +28,7 @@ from conductor.claims import Claim
 from conductor.conduct import conduct
 from conductor.procedure import Procedure, Run
 from conductor.seams import Citation, ReferenceNotCarriedError
-from tests._fakes import RecordingControl
+from tests._fakes import RecordingAdjusting
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -252,8 +251,8 @@ def test_walk_over_an_engine_that_drops_keepers_ids_refuses_the_step() -> None:
     )
     walk = conduct(
         procedure,
-        control=RecordingControl(),
-        engine=_adapter(FakeEngine(carries=False)),
+        adjusting=RecordingAdjusting(),
+        running=_adapter(FakeEngine(carries=False)),
         cites=[CITES],
     )
     assert not walk.finished

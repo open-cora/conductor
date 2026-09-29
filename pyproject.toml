@@ -8,18 +8,18 @@ authors = [{ name = "Doga Gursoy" }]
 license = { text = "Apache-2.0" }
 
 # The core has none, and the absence is the design rather than an early
-# state: every module above `conductor.epics_control` takes a seam shaped
+# state: every module above `conductor.adapters.epics_control` takes a seam shaped
 # like the verbs it uses, so which control library a deployment runs is a
 # choice it makes at its entrypoint.
 dependencies = []
 
 # An adapter's library is an extra for the same reason. Installing this
 # package to drive a Tango beamline should not drag in Channel Access, and
-# `conductor.epics_control` is the only module that imports the name below.
+# `conductor.adapters.epics_control` is the only module that imports the name below.
 [project.optional-dependencies]
 epics = ["pyepics>=3.5,<4"]
 # Running this as a process, rather than importing it as a library. Only
-# `__main__` needs it: `conductor.adapters.keeper_http` writes out the shape of a
+# `__main__` needs it: `conductor.adapters.http_tasking` writes out the shape of a
 # client and takes one, so composing and walking a procedure costs no HTTP
 # library at all.
 service = ["httpx>=0.28,<1"]
@@ -32,9 +32,9 @@ dev = [
     "ruff>=0.16.1,<0.17",
     "pyright>=1.1.411,<2",
     "pre-commit>=4.6.1,<5",
-    # The control adapter is checked against a soft IOC rather than a double,
-    # for the reason the spikes give: an imitation that was lenient about the
-    # thing under test would answer the question by construction. caproto
+    # The control adapter is checked against a soft IOC rather than a double:
+    # an imitation that was lenient about the thing under test would answer
+    # the question by construction. caproto
     # serves Channel Access from Python, so this needs no EPICS installation.
     "caproto>=1.3,<2",
     "pyepics>=3.5,<4",

@@ -4,7 +4,7 @@
 
 This project runs as a process at one beamline. It asks the keeper what has been dispatched there, claims one execution, walks it reporting each step as the step ends, and asks again. Nothing dispatches to it and it listens on nothing: every call goes out, over the same HTTP surface every other client of the keeper uses.
 
-That is right for a library a person runs from a terminal and wrong for the direction this system is going. The keeper is to be an execution path rather than only a record of one: an actor puts a proposal forward, and what runs it is a conductor rather than the actor's own connection to an engine. The reason is the engineless beamline. A conductor drives hardware through `Control`, which needs no engine at all, so a procedure walks at a beamline that has never heard of an engine. Routing conducted work through an engine would make the capability depend on which software a facility adopted.
+That is right for a library a person runs from a terminal and wrong for the direction this system is going. The keeper is to be an execution path rather than only a record of one: an actor puts a proposal forward, and what runs it is a conductor rather than the actor's own connection to an engine. The reason is the engineless beamline. A conductor drives hardware through `Adjusting`, which needs no engine at all, so a procedure walks at a beamline that has never heard of an engine. Routing conducted work through an engine would make the capability depend on which software a facility adopted.
 
 A walk therefore has to outlive the session that asked for it. This page says what that service promises and, more importantly, what it refuses to promise, because the interesting limits here are measured rather than argued.
 
@@ -16,7 +16,7 @@ A walk therefore has to outlive the session that asked for it. This page says wh
    not promised    the hardware stops when the walk stops
 ```
 
-The distinction is not pedantry. A spike killed a driver mid-move with SIGKILL and the motor travelled to its target with nothing alive that had asked for it, and no stop document was ever emitted. SIGKILL offers no hook, so no arrangement above the hardware can promise the third line. Anything that must stop on abandonment needs a watchdog beside the hardware, which is neither this system nor its conductor.
+The distinction is not pedantry. Kill a driver mid-move with SIGKILL and the motor travels to its target with nothing alive that asked for it, and no stop document is emitted anywhere. SIGKILL offers no hook, so no arrangement above the hardware can promise the third line. Anything that must stop on abandonment needs a watchdog beside the hardware, which is neither this system nor its conductor.
 
 So "safe across its own restart" means that what the walk did is still known afterwards. It does not mean the walk is recoverable, and it does not mean the beamline is where the procedure left it.
 
@@ -31,11 +31,11 @@ Coordination splits in two, and only the coarse half is durable.
 
 A walk takes its lease once, at the start, over the union of the scopes its steps declare. A step takes its claim from the in-process ledger and releases it on the way out of the block, exactly as it does today.
 
-The split is forced by where the parts run. A conductor runs at the beamline because Channel Access is a local-network protocol, and the keeper runs centrally. Putting a claim grant on the far side of that link would place a round trip inside every motor move, over a connection whose reachability is still an open question in `beamlines/EXPANSION.md`. One lease per walk pays that cost once.
+The split is forced by where the parts run. A conductor runs at the beamline because Channel Access is a local-network protocol, and the keeper runs centrally. Putting a claim grant on the far side of that link would place a round trip inside every motor move, over a connection whose reachability is still an open question. One lease per walk pays that cost once.
 
-It also matches what was measured. A spike compared a coarse whole-instrument lock beside a fine per-step claim and concluded a conductor plausibly wants both, because they are statements of different sizes: one says who owns the instrument for a while, the other says which device this step needs. Here the keeper holds the coarse one.
+A coarse whole-instrument lock and a fine per-step claim are statements of different sizes, and a conductor plausibly wants both: one says who owns the instrument for a while, the other says which device this step needs. Here the keeper holds the coarse one.
 
-**An expired lease does not mean the devices are free.** It means they were last touched by a walk that stopped reporting, which is a different fact and a weaker one. Releasing them to the next caller would assert that the previous walk finished touching them, which is the claim the SIGKILL measurement refutes.
+**An expired lease does not mean the devices are free.** It means they were last touched by a walk that stopped reporting, which is a different fact and a weaker one. Releasing them to the next caller would assert that the previous walk finished touching them, which is exactly what SIGKILL makes unsafe to assert.
 
 ## What a restart does
 
@@ -75,32 +75,40 @@ The record is a separate aggregate and it is called **Execution**. A walk is wha
 
 ## How the record reaches the keeper
 
-Through a seam, beside the two that drive hardware. The Protocol is in `conductor.seams`, and `conductor.adapters.keeper_http` implements it over the same HTTP surface every other client uses.
+Through a seam, beside the two that drive hardware. The Protocol is in `conductor.seams`, and `conductor.adapters.http_tasking` implements it over the same HTTP surface every other client uses.
 
-**The seam is now `Keeper`, and it asks rather than announces.** It replaced `Recording`, whose first call took a caller-minted reference, a procedure name and a step list, all three of which the keeper writes at dispatch before anything is asked to drive them.
+**The seam is `Tasking`, and it asks rather than announces.** A conductor finds out what is waiting for it, says it is driving one, and reports against a record the keeper wrote at dispatch before anything was asked to drive it.
 
 ```
    take(beamline, wait)      what is dispatched here and unclaimed
-   claim(execution_id)       this conductor is driving it, or 409
-   report(id, index, outcome) how one step ended
-   finish(execution_id)      nothing further is coming
+   claim(execution_id)       this conductor is driving it, and how to say so
 ```
 
-`take` is a long poll rather than a poll: it is given how long it may block and returns the moment work appears. `claim` returning False is ordinary rather than a failure, because nothing reserves an assignment for whoever read it and two conductors seeing one execution is expected.
+`take` is a long poll rather than a poll: it is given how long it may block and returns the moment work appears. `claim` returning nothing is ordinary rather than a failure, because nothing reserves an assignment for whoever read it and two conductors seeing one execution is expected.
 
-`conduct` does not take that seam. It takes `Reporting`, which is the two verbs a walk uses, already bound to the execution it is walking, so a walk cannot ask for work or claim any. `reports_to` is the binding.
+**What a claim hands back is the reporting.** Winning the race is what earns the means of reporting, so a conductor cannot report against an execution it did not claim, and the execution id stops travelling the moment the race is settled.
+
+```
+   step_ended(index, outcome)  how one step ended
+   walk_ended()                nothing further is coming
+```
+
+`conduct` takes that, and only that. A walk is of exactly one execution and whatever handed the reporting over knows which, so a walk can neither ask for work nor claim any nor name a record other than its own.
 
 **The loop is `conductor.intake`, and `python -m conductor` runs it.** It takes, claims, walks and repeats, for as long as it is left running, and it is given its seams rather than building any, so the one module that names an adapter is the entrypoint. Everything it catches gets one policy: say what happened, wait, ask again. There is deliberately no judgement about which failures are permanent, because a daemon that exited on one would hand a service manager a crash loop in place of a retry loop.
 
 ```
-   Control        reading and writing one record at a time
-   Engine         asking an engine to run a routine
-   recording      telling the keeper what this walk is doing
+   Adjusting      putting one value where a step says
+   Running        handing a whole routine to an engine
+   Tasking        getting work this beamline owns
+   Reporting      saying how this walk's steps went
 ```
+
+Each is named for what a conductor does through it rather than for what is on the other side. A name saying what is on the other side cannot be wrong in a useful way, because anything over there is a control system of some sort, or an engine of some sort; a name that says what the caller does stops being true the moment the caller stops doing it.
 
 The conductor's core names no outside system: `claims`, `procedure`, `seams`, `conduct` and `outcomes` import the standard library and each other, and a test in that package holds them to it. A direct dependency on the keeper would break that rule for the one client that most needs to stay honest about it.
 
-A seam keeps the core pure and leaves the choice to a deployment, which is the same arrangement `Control` and `Engine` already use. It also gives the open question about degraded operation a shape rather than an answer: whether a conductor may walk while the keeper is unreachable becomes a question about which adapter a beamline installs, not a question about how the walk is built.
+A seam keeps the core pure and leaves the choice to a deployment, which is the same arrangement `Adjusting` and `Running` already use. It also gives the open question about degraded operation a shape rather than an answer: whether a conductor may walk while the keeper is unreachable becomes a question about which adapter a beamline installs, not a question about how the walk is built.
 
 ## Why the ledger does not move
 
@@ -112,7 +120,7 @@ That is why the expiry rule above matters so much. A lease that expired into "fr
 
 ## What this does not promise
 
-**That a step worked.** Unchanged from today. `Done` means the seam returned without raising, and every corrupted scan in a spike came back reporting success. A record that said otherwise would be the overclaim this tree refuses everywhere else.
+**That a step worked.** Unchanged from today. `Done` means the seam returned without raising, and a scan whose data was corrupted can still come back reporting success. A record that said otherwise would be the overclaim this tree refuses everywhere else.
 
 **That a walk can be stopped while a step is running.** There is no interruption point inside a step. `EpicsControl` waits for arrival in a poll loop bounded by its settle time, and `BlueskyEngine` runs the engine in the calling thread. So an abort request lands between steps, and a step already running finishes or times out on its own terms. Interrupting one needs a worker and an engine-side abort, which is the same conclusion the bound on a run step reached from the other direction.
 
@@ -122,7 +130,7 @@ That is why the expiry rule above matters so much. A lease that expired into "fr
 
 ## What is not decided yet
 
-**The fourth terminal.** `docs/bounded-contexts/execution.md` asks for a way to say an engine run ended without saying how, and notes that settling it matters more once something drives these executions. This is that direction, so the question is now in the way rather than ahead of it. One of the spikes found an engine that offers such a terminal natively, with a stated cause, and another found an engine whose completion string cannot distinguish a finished scan from a stopped one.
+**The fourth terminal.** The keeper asks for a way to say an engine run ended without saying how, and notes that settling it matters more once something drives these executions. This is that direction, so the question is now in the way rather than ahead of it. Some engines offer such a terminal natively, with a stated cause; others write a completion string that cannot distinguish a finished scan from a stopped one.
 
 **A fifth outcome.** `Skipped` means the walk had already stopped before reaching this step and `Broke` means the seam raised. Neither means abandoned, and the restart rule above needs a word for it.
 
