@@ -37,15 +37,48 @@ token = "a-conductor-token"
 
 [run]
 profile = "beamline_2bm.startup:run"
+
+[control]
+writable = ["corasim2bmb:"]
 ```
 
-Three settings, and the third is optional.
+Four settings. The run table is optional; the control table is optional only
+in the sense that leaving it out is a decision, and the decision it makes is
+that this conductor sets nothing.
 
 **The beamline** is set here rather than worked out from the token. Asking what
 is waiting at a beamline is a question anybody may ask, and a token is who you
 are. Tying them together would mean an operator could not ask what 7-BM is
 waiting on without holding 7-BM's identity, and one wrong grant would become a
 conductor driving hardware at the far end of the building.
+
+**What may be written** is named here and nowhere else. A step arrives from
+the keeper carrying a record name, and without this table there is nothing
+between that name and the control system. An entry is either a record, which
+permits that record alone, or a prefix ending in a separator, which permits
+everything beneath it. `corasim2bmb:m1` and `corasim2bmb:m10` are two motors,
+so the first does not permit the second.
+
+**Something has to serve what is in the list.** At a beamline being wired up
+rather than driven, that is `infra/sim/install-motors.sh`, which serves three
+motors under a prefix of this system's own and is a separate service from the
+scan simulator beside it. A conductor permitted to write to a prefix nothing
+answers to breaks every set on a connection timeout, which reads as a
+configuration problem and is an absent IOC.
+
+**Leaving the table out permits nothing, rather than everything.** A
+conductor with no control table walks its sets and breaks on the first one.
+That is deliberate: a file that forgot to say what may be written looks
+exactly like one at a beamline with nothing to write, and reading both as
+permission is how a deployment meant for a simulator ends up able to move a
+motor somebody is using. A walk stops at the step it refused, so the record
+shows which record was named and how far the procedure got.
+
+This is not access control. It binds this process and nothing else; anything
+else that can reach the control system can still write, and the thing that
+would refuse a write at the far end is that system's own access security.
+What it prevents is this conductor carrying out an instruction to move
+something it was never deployed to move.
 
 **The run profile** names something importable that hands back a ready
 engine. It is a dotted path rather than a block of settings because an engine
@@ -56,6 +89,17 @@ The conductor never builds an engine of its own. Where one exists, the
 deployment hands it over. That is what lets the same program run at a beamline
 with no engine, a beamline with a bare one, and a beamline with a managed queue,
 changing only what sits behind one seam.
+
+**A conductor registers no datasets, and there is nothing to configure.** It
+reports how each step of its own walk ended and nothing about where the data
+those steps produced is kept. Recording that is the job of whatever watches
+the engine, at every beamline rather than at some of them, because reading an
+address needs no claim and no walk.
+
+A conductor used to do it where its engine answered with a location. The
+argument for taking it out is in [Conducting](conducting.md): at the one kind
+of engine that made it easy, the watcher reads the same value from the same
+place, so a beamline running both registered the address twice.
 
 ## Stopping one
 

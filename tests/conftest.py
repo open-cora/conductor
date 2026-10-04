@@ -2,16 +2,42 @@
 
 from __future__ import annotations
 
+import os
 import time
 from typing import TYPE_CHECKING
 
 import pytest
 
-from tests import _ioc
+from tests import _ioc, _tomoscan_ioc
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+SIM_SERVER_PORT = 5096
+"""The commissioning sim's port, which is not the double's.
+
+Declared here rather than beside the tests that use it, because the
+address list below has to name every port this suite serves on and is
+built before any of them starts. A port added there and not here is an
+IOC the client cannot find, which looks exactly like an IOC that failed
+to start.
+"""
+
+COUNTER_SERVER_PORT = 5097
+"""A second port for the sim, for the one test that restarts one.
+
+The scan-counter test stops and starts a server of its own while the
+module-scoped one is still serving. Two Channel Access servers on one
+port is a race whose loser is silent, and it showed up exactly that
+way: the test passed alone and failed in the suite.
+"""
+
+# Before `_ioc.localhost_only()`, whose own setdefault would otherwise fix
+# the address list to the default port alone and hide the other IOCs.
+os.environ.setdefault(
+    "EPICS_CA_ADDR_LIST",
+    f"{_tomoscan_ioc.CLIENT_ADDR_LIST} 127.0.0.1:{SIM_SERVER_PORT} 127.0.0.1:{COUNTER_SERVER_PORT}",
+)
 _ioc.localhost_only()
 
 STARTUP_TIMEOUT = 30.0
@@ -100,3 +126,23 @@ def motor_at_home() -> Iterator[None]:
         for motor in (_ioc.MOTOR, _ioc.OTHER_MOTOR):
             control.set(motor, 0.0)
     yield
+
+
+@pytest.fixture(scope="session")
+def tomoscan_ioc() -> Iterator[None]:
+    """Serve the TomoScan records, for the tests that drive the engine.
+
+    Not autouse, unlike the motor IOC. Only the engine tests need it, and
+    a second IOC started for every session would be paid for by every
+    test that never speaks to it.
+    """
+    server = _tomoscan_ioc.start()
+    try:
+        _tomoscan_ioc.wait_until_serving(server, STARTUP_TIMEOUT)
+    except BaseException:
+        server.terminate()
+        server.wait(timeout=10)
+        raise
+    yield
+    server.terminate()
+    server.wait(timeout=10)

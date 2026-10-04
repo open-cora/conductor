@@ -24,7 +24,7 @@ from conductor.adapters.http_tasking import (
     UnwalkableAssignmentError,
 )
 from conductor.claims import Claim, Scope
-from conductor.outcomes import Broke, Done, Outcome, Refused, Skipped
+from conductor.outcomes import Broke, Declined, Done, Outcome, Refused, Skipped
 from conductor.procedure import Run, Set
 from conductor.seams import Citation, Ran, Tasking
 
@@ -39,6 +39,18 @@ PROCEDURE_ID = "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f"
 OPERATION_ID = "9a8b7c6d-5e4f-4a3b-2c1d-0e9f8a7b6c5d"
 SET_STEP_ID = "aaaaaaaa-1111-4222-8333-444444444444"
 ACQUIRE_STEP_ID = "bbbbbbbb-1111-4222-8333-444444444444"
+
+DATASET_ID = "cccccccc-1111-4222-8333-444444444444"
+
+WALKED_SET_STEP_ID = "aaaaaaaa-9999-4222-8333-444444444444"
+WALKED_ACQUIRE_STEP_ID = "bbbbbbbb-9999-4222-8333-444444444444"
+"""The same two steps as the execution numbers them.
+
+Deliberately unlike the procedure's ids above, because the whole point
+of reading them off the execution is that the two numberings differ.
+Fixtures that reused one id would pass against an adapter that carried
+either.
+"""
 
 
 @dataclass(slots=True)
@@ -153,6 +165,31 @@ def _a_run(*scopes: str, operation_id: str = OPERATION_ID) -> dict[str, Any]:
     }
 
 
+def _execution(*pairs: tuple[str, str]) -> Reply:
+    """The execution as `GET /executions/{id}` returns it, trimmed.
+
+    Each pair is one step, as the procedure numbers it and as the
+    execution does.
+    """
+    return Reply(
+        200,
+        {
+            "execution_id": EXECUTION_ID,
+            "procedure_id": PROCEDURE_ID,
+            "beamline": "2-bm",
+            "status": "Dispatched",
+            "steps": [
+                {"procedure_step_id": procedure_step, "step_id": walked, "describes": "a step"}
+                for procedure_step, walked in pairs
+            ],
+        },
+    )
+
+
+BOTH_STEPS = ((SET_STEP_ID, WALKED_SET_STEP_ID), (ACQUIRE_STEP_ID, WALKED_ACQUIRE_STEP_ID))
+TWO_RUNS = ((ACQUIRE_STEP_ID, WALKED_ACQUIRE_STEP_ID),)
+
+
 def _procedure(*steps: Mapping[str, Any], name: str = "tomography") -> Reply:
     return Reply(
         200, {"procedure_id": PROCEDURE_ID, "name": name, "beamline": "2-bm", "steps": list(steps)}
@@ -248,6 +285,7 @@ def test_an_assignment_carries_the_procedure_as_this_package_composes_one() -> N
         **{
             "/executions": _listing(_dispatch()),
             f"/procedures/{PROCEDURE_ID}": _procedure(_a_set(), _a_run("2bmb:cam1:", "2bmb:m1")),
+            f"/executions/{EXECUTION_ID}": _execution(*BOTH_STEPS),
             f"/operations/{OPERATION_ID}": _operation("tomo_scan"),
         }
     )
@@ -267,18 +305,25 @@ def test_an_assignment_carries_the_procedure_as_this_package_composes_one() -> N
     ]
 
 
-def test_the_step_ids_line_up_with_the_steps_they_name() -> None:
-    """Positional, which is what `Assignment` promises and what the walk relies on.
+def test_the_step_ids_that_travel_are_the_executions_and_not_the_procedures() -> None:
+    """Two numberings of one step, and only one of them is any use.
 
-    A run carries its step id into the engine's metadata, so a
-    pairing off by one would file every run against the wrong step of the
-    right execution, which reads as a plausible record rather than as an
-    error.
+    A run carries its step id into the engine's metadata, and whatever
+    watches the engine hands that id back to a keeper endpoint keyed on
+    the execution's numbering. A procedure step id there is a 404 about
+    a step the execution does not hold, and this conductor never noticed
+    because it reports by index and so needs neither id itself.
+
+    Positional against the procedure's steps, which is what `Assignment`
+    promises, but paired by `procedure_step_id` rather than by order. A
+    pairing off by one would file every run against the wrong step of
+    the right execution, which reads as a plausible record.
     """
     _, keeper = _keeper(
         **{
             "/executions": _listing(_dispatch()),
             f"/procedures/{PROCEDURE_ID}": _procedure(_a_set(), _a_run()),
+            f"/executions/{EXECUTION_ID}": _execution(*BOTH_STEPS),
             f"/operations/{OPERATION_ID}": _operation(),
         }
     )
@@ -286,7 +331,7 @@ def test_the_step_ids_line_up_with_the_steps_they_name() -> None:
     assignment = keeper.take("2-bm", wait=0.0)
 
     assert assignment is not None
-    assert list(assignment.step_ids) == [SET_STEP_ID, ACQUIRE_STEP_ID]
+    assert list(assignment.step_ids) == [WALKED_SET_STEP_ID, WALKED_ACQUIRE_STEP_ID]
     assert len(assignment.step_ids) == len(assignment.procedure.steps)
 
 
@@ -301,6 +346,9 @@ def test_an_operation_is_looked_up_once_however_many_procedures_cite_it() -> Non
         **{
             "/executions": _listing(_dispatch()),
             f"/procedures/{PROCEDURE_ID}": _procedure(_a_run(), _a_run()),
+            f"/executions/{EXECUTION_ID}": _execution(
+                (ACQUIRE_STEP_ID, WALKED_ACQUIRE_STEP_ID),
+            ),
             f"/operations/{OPERATION_ID}": _operation(),
         }
     )
@@ -324,6 +372,7 @@ def test_a_scope_this_package_cannot_parse_refuses_the_whole_assignment() -> Non
         **{
             "/executions": _listing(_dispatch()),
             f"/procedures/{PROCEDURE_ID}": _procedure(_a_run(".")),
+            f"/executions/{EXECUTION_ID}": _execution(*TWO_RUNS),
             f"/operations/{OPERATION_ID}": _operation(),
         }
     )
@@ -344,6 +393,7 @@ def test_a_step_kind_this_conductor_does_not_know_refuses_the_assignment() -> No
         **{
             "/executions": _listing(_dispatch()),
             f"/procedures/{PROCEDURE_ID}": _procedure({"kind": "transfer", "step_id": SET_STEP_ID}),
+            f"/executions/{EXECUTION_ID}": _execution(*BOTH_STEPS),
         }
     )
 
@@ -405,7 +455,7 @@ def test_a_claim_refused_for_any_other_reason_is_raised() -> None:
     [
         (
             Done(step="move 2bmb:m1 to 0.0"),
-            {"index": 2, "outcome": "Done", "engine_reference": None},
+            {"index": 2, "outcome": "Done"},
         ),
         (
             Done(
@@ -416,11 +466,17 @@ def test_a_claim_refused_for_any_other_reason_is_raised() -> None:
                     said="success",
                 ),
             ),
-            {"index": 2, "outcome": "Done", "engine_reference": "uid-9"},
+            {"index": 2, "outcome": "Done"},
         ),
         (
             Refused(
                 step="run", holder="tomography[0]", overlap=frozenset({Scope.record("2bmb:m1")})
+            ),
+            {"index": 2, "outcome": "Refused"},
+        ),
+        (
+            Declined(
+                step="run", routine="tomo_scan", cause="UnknownRoutineError: this engine runs set"
             ),
             {"index": 2, "outcome": "Refused"},
         ),
@@ -430,7 +486,7 @@ def test_a_claim_refused_for_any_other_reason_is_raised() -> None:
         ),
         (Skipped(step="run"), {"index": 2, "outcome": "Skipped"}),
     ],
-    ids=["done", "done-carrying-a-run", "refused", "broke", "skipped"],
+    ids=["done", "done-carrying-a-run", "refused", "declined", "broke", "skipped"],
 )
 def test_a_step_report_carries_the_detail_its_outcome_allows(
     outcome: Outcome, expected: dict[str, Any]
@@ -502,6 +558,7 @@ def test_every_request_carries_the_token_it_was_configured_with() -> None:
         **{
             "/executions": _listing(_dispatch()),
             f"/procedures/{PROCEDURE_ID}": _procedure(_a_set()),
+            f"/executions/{EXECUTION_ID}": _execution((SET_STEP_ID, WALKED_SET_STEP_ID)),
             f"/executions/{EXECUTION_ID}/claim": Reply(204),
             f"/executions/{EXECUTION_ID}/end": Reply(204),
         }

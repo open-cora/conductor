@@ -12,20 +12,43 @@ of it is covered somewhere a test can reach.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import os
+import signal
+from dataclasses import replace
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from conductor.__main__ import NoEngine, NoEngineError, engine_for, main
-from conductor.claims import Claim
+from conductor.__main__ import (
+    NoEngine,
+    NoEngineError,
+    control_for,
+    engine_for,
+    main,
+    stop_on_termination,
+)
+from conductor.adapters.tomoscan_engine import ManyRoutinesError, TomoscanEngine
+from conductor.claims import Claim, Scope
 from conductor.conduct import conduct
-from conductor.config import ConductorConfig, ConfigError, from_mapping
+from conductor.config import (
+    ConductorConfig,
+    ConfigError,
+    EngineProfile,
+    TomoscanServer,
+    from_mapping,
+)
+from conductor.confinement import Confinement
+from conductor.intake import serve
 from conductor.outcomes import Broke, Done
 from conductor.procedure import Procedure, Run, Set
+from conductor.seams import Assignment
 from tests._fakes import RecordingAdjusting, RecordingRunning
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from conductor.adapters.http_tasking import HttpClient
+    from conductor.seams import Adjusting, Tasking
 
 COMPLETE = """
 beamline = "2-bm"
@@ -36,12 +59,16 @@ token = "a-conductor-token"
 """
 
 
+FAKE_HTTP = cast("HttpClient", object())
+"""Something to hold, never called. Building a filer sends no request."""
+
+
 def _config(profile: str | None = None) -> ConductorConfig:
     return ConductorConfig(
         beamline="2-bm",
         base_url="https://keeper.example",
         token="t",
-        engine_profile=profile,
+        engine=EngineProfile(profile) if profile else None,
     )
 
 
@@ -159,6 +186,111 @@ def test_a_profile_missing_its_separator_is_refused_where_the_format_is_known() 
     assert "module.path:name" in str(problem.value)
 
 
+def test_a_run_table_naming_a_prefix_builds_a_tomoscan_seam_with_no_deployment_code() -> None:
+    """Everything that engine takes is a string, so no profile is needed.
+
+    The point of the second shape: a beamline running TomoScan writes
+    two settings rather than authoring a Python file that nothing in
+    this tree would test.
+    """
+    config = from_mapping(
+        {
+            "beamline": "2-bm",
+            "keeper": {"base_url": "https://a.example", "token": "t"},
+            "run": {"prefix": "corasim2bmb:TomoScan:", "routines": ["tomo_scan"]},
+        }
+    )
+
+    assert config.engine == TomoscanServer(
+        prefix="corasim2bmb:TomoScan:", routines=frozenset({"tomo_scan"})
+    )
+    assert isinstance(engine_for(config), TomoscanEngine)
+
+
+def test_a_tomoscan_engine_named_two_routines_refuses_to_be_built() -> None:
+    """The allowlist is a guard, not a selector, so widening it disarms it.
+
+    A name picks nothing here: TomoScan performs one kind of scan and
+    what varies is the parameters. So a second name would be accepted
+    and would start that same scan, which is exactly the outcome the
+    one-name check exists to prevent. The config parses, because it is
+    well formed; the engine is what cannot be built from it.
+    """
+    config = from_mapping(
+        {
+            "beamline": "2-bm",
+            "keeper": {"base_url": "https://a.example", "token": "t"},
+            "run": {"prefix": "corasim2bmb:TomoScan:", "routines": ["tomo_scan", "flat_field"]},
+        }
+    )
+
+    with pytest.raises(ManyRoutinesError) as refused:
+        engine_for(config)
+
+    assert "flat_field" in str(refused.value)
+
+
+def test_a_run_table_naming_both_a_profile_and_a_prefix_is_refused() -> None:
+    """Two engines named, and picking one silently would pick wrong half the time."""
+    with pytest.raises(ConfigError) as problem:
+        from_mapping(
+            {
+                "beamline": "2-bm",
+                "keeper": {"base_url": "https://a.example", "token": "t"},
+                "run": {"profile": "a:b", "prefix": "x:", "routines": ["s"]},
+            }
+        )
+
+    assert "one or the" in str(problem.value)
+
+
+def test_a_run_table_naming_neither_is_refused_with_both_shapes_spelled_out() -> None:
+    """A present table is a request for an engine, so an empty one is a mistake.
+
+    Distinct from leaving the table out, which is the supported way to
+    have no engine and is what 2-BM runs today.
+    """
+    with pytest.raises(ConfigError) as problem:
+        from_mapping(
+            {
+                "beamline": "2-bm",
+                "keeper": {"base_url": "https://a.example", "token": "t"},
+                "run": {},
+            }
+        )
+
+    assert "profile" in str(problem.value)
+    assert "prefix" in str(problem.value)
+
+
+@pytest.mark.parametrize(
+    ("routines", "because"),
+    [
+        (None, "missing"),
+        ([], "empty"),
+        (["tomo_scan", ""], "an empty name"),
+        (["tomo_scan", 7], "a name that is not a string"),
+    ],
+    ids=["missing", "empty", "empty-name", "not-a-string"],
+)
+def test_a_tomoscan_table_without_usable_routine_names_is_refused(
+    routines: object, because: str
+) -> None:
+    """A server told to answer to nothing refuses every run while looking configured."""
+    table: dict[str, object] = {"prefix": "corasim2bmb:TomoScan:"}
+    if routines is not None:
+        table["routines"] = routines
+
+    with pytest.raises(ConfigError, match="routines"):
+        from_mapping(
+            {
+                "beamline": "2-bm",
+                "keeper": {"base_url": "https://a.example", "token": "t"},
+                "run": table,
+            }
+        )
+
+
 def test_an_acquisition_table_that_is_not_a_table_is_refused() -> None:
     with pytest.raises(ConfigError) as problem:
         from_mapping(
@@ -170,3 +302,96 @@ def test_an_acquisition_table_that_is_not_a_table_is_refused() -> None:
         )
 
     assert "run" in str(problem.value)
+
+
+def test_a_deployment_naming_nothing_writable_gets_a_seam_that_sets_nothing() -> None:
+    """The default is the strictest policy, not the absence of one."""
+    control = control_for(_config())
+
+    assert isinstance(control, Confinement)
+    assert not control.permits("2bmb:m1")
+
+
+def test_a_deployment_naming_what_it_may_set_gets_a_seam_confined_to_it() -> None:
+    config = replace(_config(), writable=frozenset({Scope.namespace("corasim2bmb:")}))
+
+    control = control_for(config)
+
+    assert isinstance(control, Confinement)
+    assert control.permits("corasim2bmb:m1")
+    assert not control.permits("2bmb:m1")
+
+
+def test_a_stop_signal_lets_the_walk_in_progress_finish_and_report() -> None:
+    """The orderly stop the loop's predicate exists for.
+
+    The handler used to raise instead. A `KeyboardInterrupt` is a
+    `BaseException`, so neither the loop's arm nor `conduct`'s caught
+    one: a signal landing mid-walk unwound through the running step,
+    left the motor where that step had got to, reported none of the
+    steps after it, and sent no ending. Driven by a real signal, because
+    a double raising where one would land is what that failure was made
+    of.
+
+    The predicate is capped as well as signalled, so a handler that
+    stops nothing fails this on its assertions rather than hanging the
+    suite.
+    """
+    moved: list[str] = []
+    reported: list[tuple[object, str]] = []
+
+    class StopsUsMidWalk:
+        def set(self, record: str, value: float) -> None:
+            _ = value
+            if record == "2bmb:m2":
+                os.kill(os.getpid(), signal.SIGTERM)
+            moved.append(record)
+
+    class Reports:
+        def step_ended(self, index: int, outcome: object) -> None:
+            reported.append((index, type(outcome).__name__))
+
+        def walk_ended(self) -> None:
+            reported.append(("end", "walk_ended"))
+
+    procedure = Procedure(
+        name="three_sets",
+        steps=(
+            Set(record="2bmb:m1", to=1.0),
+            Set(record="2bmb:m2", to=2.0),
+            Set(record="2bmb:m3", to=3.0),
+        ),
+    )
+
+    class HandsOverOne:
+        def take(self, beamline: str, wait: float) -> Assignment:
+            _ = beamline, wait
+            return Assignment(execution_id="e1", procedure=procedure, step_ids=["a", "b", "c"])
+
+        def claim(self, execution_id: str) -> Reports:
+            _ = execution_id
+            return Reports()
+
+    asked_to_stop = stop_on_termination()
+    turns = iter(range(2))
+
+    def keep_going() -> bool:
+        return asked_to_stop() and next(turns, None) is not None
+
+    before = {number: signal.getsignal(number) for number in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        serve(
+            cast("Tasking", HandsOverOne()),
+            "2-bm",
+            adjusting=cast("Adjusting", StopsUsMidWalk()),
+            running=RecordingRunning(),
+            keep_going=keep_going,
+            pause=lambda _seconds: None,
+            note=lambda _message: None,
+        )
+    finally:
+        for number, handler in before.items():
+            signal.signal(number, handler)
+
+    assert moved == ["2bmb:m1", "2bmb:m2", "2bmb:m3"], "the walk ran to its last step"
+    assert reported == [(0, "Done"), (1, "Done"), (2, "Done"), ("end", "walk_ended")]

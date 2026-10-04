@@ -141,6 +141,10 @@ def serve(
     backoff should not spend it, and because where a daemon's messages go
     is a deployment's choice. This package still has no logging, and a
     callable is the smallest thing that does not decide the question.
+
+    Nothing here records where data went. That is read from the engine
+    by whatever watches it, which needs no claim and no walk to do, and
+    `seams` holds the argument for the seam this no longer has.
     """
     book = ledger if ledger is not None else Ledger()
     note(f"asking for work at {beamline}")

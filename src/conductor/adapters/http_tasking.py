@@ -1,11 +1,20 @@
-"""The `Tasking` seam over the keeper's HTTP API, which is the only way in.
+"""The keeper's HTTP API, which is the only way in, as the one seam it answers.
 
 The keeper holds no registry of conductors and dials nothing. Everything this
 conductor learns and everything it reports leaves through the surface any
 other client uses, which is what `seams.Tasking` means by every call going
 out and none coming in.
 
-## Four verbs over five routes
+## One seam, where there were two
+
+A second one registered a dataset, and it went with the capability
+rather than with this module: a conductor records how its own steps
+went and nothing about where the data they produced is kept. The
+argument is in `seams`, and the short of it is that reading an address
+needs no claim and no walk, so it belongs to whatever watches the
+engine.
+
+## Four verbs over four routes
 
     take     GET  /executions?beamline=&status=Dispatched&wait=
              GET  /procedures/{procedure_id}
@@ -48,13 +57,16 @@ at all.
 
 ## What the keeper is not told, and why
 
-**A refusal's reason.** `Refused` here names the step holding the
-overlapping claim and the scopes that collided. The keeper's step report allows
-no detail on that outcome, so it records that a step was refused and
-nothing about what it ran into. The collision stays in this process's own
-tally and its log. Widening that is a change to the keeper's report command
-rather than something an adapter may decide by putting the reason in a
-field meant for something else.
+**A refusal's reason, and which of the two it was.** Two outcomes travel
+as `Refused`, because the keeper has one word for a step that did not
+start. `Refused` names the step holding the overlapping claim and the
+scopes that collided; `Declined` names the routine the engine was not
+given. The keeper's step report allows no detail on that outcome, so it
+records that a step was refused and neither what it ran into nor which
+kind of refusal it was. Both stay in this process's own tally and its
+log, where they are separate classes. Widening that is a change to the
+keeper's report command rather than something an adapter may decide by
+putting the reason in a field meant for something else.
 
 **A moment.** No outcome here carries a time, so the keeper stamps each report
 as it arrives. That is accurate to within one request, because a report
@@ -65,15 +77,26 @@ goes out as its step ends.
 The one word that differs across the two vocabularies. This package names
 an outcome for what happened to the step, and the keeper names it for the state
 the step ended in.
+
+## Why a step report carries no idempotency key
+
+A repeated one is refused by the record with a 409 naming the state it
+holds, which says more than a cached success would: it tells a
+redelivery apart from a conductor that has lost track of where it is.
+
+Nothing sent from here needs a key for the opposite reason either.
+Every request this makes is about the walk, and a walk reports each
+step once, so there is no write here that a second caller is expected
+to make with the same meaning.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Protocol, assert_never, runtime_checkable
 
 from conductor.claims import Claim, InvalidScopeError
-from conductor.outcomes import Broke, Done, Refused, Skipped
+from conductor.outcomes import Broke, Declined, Done, Refused, Skipped
 from conductor.procedure import InvalidProcedureError, Procedure, Run, Set
 from conductor.seams import Assignment
 
@@ -276,7 +299,12 @@ class HttpTasking:
         row = rows[0]
         execution_id = str(row["execution_id"])
         procedure = self._get(f"/procedures/{row['procedure_id']}")
-        return self._assignment(execution_id, procedure)
+
+        # The execution as well as the procedure, because they number
+        # their steps differently and only one of the two numbers is any
+        # use to whoever watches the engine. See `_assignment`.
+        execution = self._get(f"/executions/{execution_id}")
+        return self._assignment(execution_id, procedure, execution)
 
     def claim(self, execution_id: str) -> Reporting | None:
         """Take that execution, and hand back the way to report on it.
@@ -319,13 +347,34 @@ class HttpTasking:
         """
         self._post(f"/executions/{execution_id}/end", None)
 
-    def _assignment(self, execution_id: str, procedure: Mapping[str, Any]) -> Assignment:
+    def _assignment(
+        self,
+        execution_id: str,
+        procedure: Mapping[str, Any],
+        execution: Mapping[str, Any],
+    ) -> Assignment:
         """Turn the keeper's procedure into one this package can walk.
 
         Operation names are resolved first, before anything is built. That
         keeps a lookup that was refused distinguishable from a step that
         could not be built: the first is a `KeeperError` about reaching
         the keeper and the second is about what the keeper sent.
+
+        ## Two numberings, and only one of them travels
+
+        A procedure's steps have ids of their own, and an execution's
+        steps have different ids that point back at them. This conductor
+        reports by index and so never needed either, which is how it came
+        to carry the wrong one for a year of nobody noticing: the ids go
+        into the engine's metadata for whatever watches the engine, and
+        that reader hands them back to a keeper endpoint keyed on the
+        execution's numbering. A procedure step id there is a 404 about a
+        step the execution does not hold.
+
+        So the pairing is read off the execution, and keyed on
+        `procedure_step_id` rather than taken in order. Order would
+        almost always be right, and the failure when it was not would be
+        a run filed against the wrong step, which reads as a real record.
         """
         raw: Sequence[Mapping[str, Any]] = procedure["steps"]
         named = {
@@ -342,10 +391,22 @@ class HttpTasking:
         except (InvalidProcedureError, InvalidScopeError) as problem:
             raise UnwalkableAssignmentError(execution_id, str(problem)) from problem
 
+        walked: Mapping[str, str] = {
+            str(step["procedure_step_id"]): str(step["step_id"]) for step in execution["steps"]
+        }
+        try:
+            step_ids = tuple(walked[str(step["step_id"])] for step in raw)
+        except KeyError as unpaired:
+            raise UnwalkableAssignmentError(
+                execution_id,
+                f"the execution holds no step for procedure step {unpaired}, so a run "
+                "of it could not be filed against anything",
+            ) from unpaired
+
         return Assignment(
             execution_id=execution_id,
             procedure=walkable,
-            step_ids=tuple(str(step["step_id"]) for step in raw),
+            step_ids=step_ids,
         )
 
     def _routine_name(self, operation_id: str) -> str:
@@ -410,23 +471,35 @@ def _step_report(index: int, outcome: Outcome) -> dict[str, Any]:
     """One step's ending, in the fields the keeper's report command takes.
 
     Each outcome carries exactly the detail its own allows, which the
-    domain checks on arrival: a cause on anything but a break, or a
-    reference on anything but a completion, is refused over both of
-    the keeper's surfaces rather than by a schema on one of them.
+    domain checks on arrival: a cause on anything but a break is refused
+    over both of the keeper's surfaces rather than by a schema on one of
+    them.
+
+    A done step sends no engine reference. The keeper still accepts one
+    there, because its log holds events that carry it and a command
+    cannot be narrowed behind them, but an engine's name for a run is
+    read by watching rather than by driving and goes to the record from
+    whatever watches.
+
+    The last arm calls `assert_never`, so a new outcome class is a type
+    error here rather than a silent omission. Without it a match that
+    runs off the end returns None, and the request goes out with no
+    body at all: the keeper is told nothing about a step that ended,
+    and the walk carries on as though it had reported.
     """
     match outcome:
-        case Done(ran=ran):
-            return {
-                "index": index,
-                "outcome": "Done",
-                "engine_reference": None if ran is None else ran.engine_reference,
-            }
+        case Done():
+            return {"index": index, "outcome": "Done"}
         case Refused():
+            return {"index": index, "outcome": "Refused"}
+        case Declined():
             return {"index": index, "outcome": "Refused"}
         case Broke(cause=cause):
             return {"index": index, "outcome": "Broken", "cause": cause}
         case Skipped():
             return {"index": index, "outcome": "Skipped"}
+        case _:
+            assert_never(outcome)
 
 
 __all__ = [

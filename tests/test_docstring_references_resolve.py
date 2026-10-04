@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING
 from tests._tracked import (
     PROJECT_ROOT,
     tracked_file_basenames,
+    tracked_other_python_files,
     tracked_source_files,
     tracked_test_files,
 )
@@ -53,6 +54,23 @@ EXTERNAL_NAMES: frozenset[str] = frozenset(
         # harness that runs the one and discards the output of the other.
         "FakeMotorIOC",
         "broadcast_beacon_loop",
+        # TomoScan's own scan lifecycle methods, named where this
+        # simulator's write ordering is attributed to them. Real, in the
+        # acquisition software the sim stands in for, and named rather
+        # than described because which method writes a record late is
+        # the whole of what is being claimed.
+        "begin_scan",
+        "end_scan",
+        # The same software's angle write and its failure teardown, named
+        # where this simulator says which of them it copies and which one
+        # beamline does without. Both decide what a finished file holds,
+        # so naming them is how the claim can be checked against source.
+        "add_theta",
+        "_end_scan_after_failure",
+        # The subclass serving one of the beamlines this runs at, named
+        # where the simulator departs from it on purpose. Real, upstream,
+        # and the reason a simulated file is not that station's file.
+        "TomoScan19BM",
         # The reporter's half of the two metadata keys. Real, in another
         # project, and pinned to the same literals on both sides so that
         # one moving without the other turns a test red rather than a run.
@@ -60,6 +78,12 @@ EXTERNAL_NAMES: frozenset[str] = frozenset(
         # The standard library's process class, named by the harness that
         # says why it starts a subprocess instead of one.
         "Process",
+        # A caproto pvproperty keyword. Named because turning it on makes
+        # a declared character array be served as a native EPICS string,
+        # which silently caps every value at forty characters, and the
+        # test that pins the channel type has to say what it is pinning
+        # against.
+        "report_as_string",
     }
 )
 """Names that are real, but defined outside this project.
@@ -162,7 +186,7 @@ def _cited_names(doc: str) -> list[str]:
 
 
 def _all_python_files() -> list[Path]:
-    return sorted(tracked_source_files() | tracked_test_files())
+    return sorted(tracked_source_files() | tracked_test_files() | tracked_other_python_files())
 
 
 def _defined_names() -> frozenset[str]:

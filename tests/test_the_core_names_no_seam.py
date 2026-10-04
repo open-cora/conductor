@@ -44,7 +44,7 @@ import pytest
 
 PACKAGE = Path(__file__).resolve().parents[1] / "src" / "conductor"
 
-CORE = frozenset({"claims", "procedure", "seams", "outcomes", "conduct"})
+CORE = frozenset({"claims", "confinement", "procedure", "seams", "outcomes", "conduct"})
 """The modules a procedure is composed in. Standard library and each other."""
 
 ENTRYPOINT = frozenset({"__init__", "__main__"})
@@ -58,14 +58,17 @@ require any adapter's library.
 
 ADAPTERS_DIR = PACKAGE / "adapters"
 
-EXPECTED_CORE_MODULES = 5
+EXPECTED_CORE_MODULES = 6
 """How many files `CORE` should find. Moving one without saying so fails here."""
 
-EXPECTED_ADAPTERS = 3
+EXPECTED_ADAPTERS = 4
 """Adapter modules under `adapters/`, excluding its `__init__`.
 
-Three: the Channel Access control seam, the engine seam over a
-RunEngine, and the HTTP one over the keeper's own API. The checks below were confirmed to
+Four: the Channel Access control seam, two engine seams, one over a
+RunEngine and one over TomoScan, and the HTTP one over the keeper's own
+API. Two engines is the point rather than an accident: which one a
+beamline runs is a choice its deployment makes, and a facility with both
+kinds of beamline needs both on disk. The checks below were confirmed to
 range over each when it arrived, which is what raising this number is
 supposed to mean.
 

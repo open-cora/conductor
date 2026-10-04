@@ -61,6 +61,26 @@ that takes it.
 entirely. They travel out to the engine so that whatever watches that
 engine can say which step a run belonged to, and they never come back
 here as a way of naming one.
+
+## Why there is no seam for the data a run produced
+
+There was a fifth, and these four are what removing it left. The
+argument for it was that an engine answering with a location has
+already given the address, so nothing needs to resolve it and the
+caller holding the value may as well record it.
+
+The premise was wrong about the engine it was written for. A reporter
+watching an engine of that kind resolves nothing either: it reads the
+same value from the same place and records it. The two were not
+dividing the work by which of them could answer. Both answered, and a
+beamline running both recorded one address twice against one step.
+
+What divides them is whether driving is required to know a thing. How
+a step ended under this package's own claim cannot be known without
+having driven it, and is this package's to report. Where the data went
+can be read by anything watching the engine, and is not. Holding the
+value at the moment a call returns is proximity rather than ownership,
+and proximity is what the fifth seam mistook for a reason.
 """
 
 from __future__ import annotations
@@ -106,14 +126,27 @@ class Ran:
     optional because not every engine has a name to give, and because a
     routine that opened no run has nothing to be named.
 
-    `cites` is what the engine's own record says the run belonged to,
-    read back out rather than echoed, which is what gives the check
-    below something real to compare. It is not the join: it is how a
-    person reading a data catalogue finds the execution a run came from.
+    It and `said` are the engine's account of itself, and this package
+    sends neither anywhere. They come back so that whatever embedded a
+    walk can read them, and a walk reports what it did rather than what
+    its engine said about it. Which of the two accounts the record gets
+    is not this package's to decide: the reporter watching that engine
+    sends the engine's, from the same place these were read.
 
-    `None` means no ids came back, which happens two ways and both are
-    ordinary: a walk outside any dispatch has none to carry, and a
-    routine that opened no run recorded nothing to carry them in.
+    `cites` is what the engine's own record says the run belonged to,
+    read back out of that record wherever there is one, which is what
+    gives the check below something real to compare. It is not the
+    join: it is how a person reading a data catalogue finds the
+    execution a run came from.
+
+    A routine that opened no run is the one case where what was passed
+    in comes back unchanged, and an adapter has to answer that way
+    rather than report nothing. There is no record to read, so there is
+    nothing that could disagree, and an adapter answering `None` would
+    have every routine that records nothing refused as an engine that
+    dropped its ids.
+
+    `None` means a walk outside any dispatch, which had none to carry.
     """
 
     cites: Citation | None
@@ -149,6 +182,26 @@ class ReferenceNotCarriedError(RuntimeError):
         )
 
 
+class RoutineNotRunHereError(RuntimeError):
+    """An engine was asked for a routine it was not given.
+
+    Declared here rather than in the adapter that raises it, because the
+    walk has to tell this apart from an engine that broke and the core
+    names no adapter. Both engines in this package carry it as a base,
+    and one written elsewhere raises it to be read the same way.
+
+    Which routines a deployment runs is configuration, so this says the
+    procedure asked for something this beamline does not do. That is a
+    fact about where the work landed rather than a fault in it, and
+    every adapter establishes it before touching anything, which is what
+    makes the step refused rather than half run.
+    """
+
+    def __init__(self, routine: str, said: str) -> None:
+        self.routine = routine
+        super().__init__(said)
+
+
 @dataclass(frozen=True, slots=True)
 class Assignment:
     """One execution that was dispatched, in terms this package can walk.
@@ -160,9 +213,11 @@ class Assignment:
 
     `step_ids` is index-aligned with `procedure.steps`, and the
     correspondence is positional because a `Procedure` here has no ids to
-    key on. Both halves are built in one adapter, from one response, in
-    one pass, so there is no second writer and no later edit for them to
-    drift across.
+    key on. Both halves are built in one adapter, in one pass, so there
+    is no second writer and no later edit for them to drift across. Not
+    from one response: the steps come from the procedure and their ids
+    from the execution, because the two number their steps differently
+    and only the execution's numbering is the one a report is keyed on.
 
     The ids are carried into the engine's own metadata so whatever
     watches that engine can say which step a run belonged to. They are
@@ -286,6 +341,7 @@ __all__ = [
     "Ran",
     "ReferenceNotCarriedError",
     "Reporting",
+    "RoutineNotRunHereError",
     "Running",
     "Tasking",
 ]

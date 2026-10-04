@@ -1,0 +1,60 @@
+# A simulated TomoScan at one beamline, for commissioning a conductor
+# without starting a scan on anybody's sample. Written by install.sh from
+# this template; the tracked copy names no host and no beamline.
+#
+# ConditionHost for the reason every unit here has it: `systemd --user`
+# reads units only from $HOME, a beamline's $HOME is NFS mounted by every
+# machine at that beamline, and two servers answering one record name is a
+# race whose loser is silent.
+#
+# The prefix is not the beamline's. It is a name of this system's own, so
+# that nothing here can be mistaken for the station's equipment and so
+# that a conductor pointed at it cannot reach real hardware by a typo in
+# one macro. Pointing a deployment at the real TomoScan is a deliberate
+# edit of one setting in the conductor's configuration, not a default
+# somebody falls into.
+
+[Unit]
+Description=CORA simulated TomoScan at @BEAMLINE@
+ConditionHost=@DEPLOY_HOST@
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# @SERVER_PORT@ is this server's Channel Access port, and it is a setting
+# rather than the default because two of these share a host. The second to
+# start would otherwise find the standard port taken and fall back to an
+# ephemeral one, which is reachable only by broadcast. The clients here are
+# configured with EPICS_CA_AUTO_ADDR_LIST=NO and an explicit address list,
+# so they search the ports they were given and find nothing.
+#
+# This was described here as how several IOCs share a machine. It is not,
+# for these clients, and the deployed units carried a hand-added port line
+# that this template had no way to express, so re-running the installer
+# erased it and moved the server.
+Environment=EPICS_CA_SERVER_PORT=@SERVER_PORT@
+
+# DATA_ROOT is where the simulated files go. It has to be a filesystem the
+# thing that reads them can see, which at a beamline splitting its soft IOC
+# from its clients is not the host's own disk.
+#
+# The counter file is what keeps a restart from reusing a file name. A real
+# TomoScan autosaves its scan number; this one would count from zero again,
+# and a repeated name reaches the keeper under an idempotency key it has
+# already seen, so the second run's data is recorded nowhere and nothing
+# reports a failure.
+ExecStart=@PYTHON@ @SIM@ --prefix @PREFIX@ --scan-seconds @SCAN_SECONDS@ --counter @COUNTER@ --data-root @DATA_ROOT@
+
+# A simulator that stops is a conductor whose every run fails, which is
+# noisy rather than dangerous. Restarted anyway, because a commissioning
+# run that dies overnight for want of a restart wastes the next morning.
+Restart=always
+RestartSec=15
+
+StandardOutput=append:@LOG@
+StandardError=append:@LOG@
+
+[Install]
+WantedBy=default.target

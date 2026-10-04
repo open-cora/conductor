@@ -63,14 +63,16 @@ import httpx
 
 from conductor.adapters.epics_control import EpicsControl
 from conductor.adapters.http_tasking import HttpTasking
-from conductor.config import ConductorConfig, ConfigError, load
+from conductor.adapters.tomoscan_engine import TomoscanEngine
+from conductor.config import ConductorConfig, ConfigError, EngineProfile, TomoscanServer, load
+from conductor.confinement import Confinement
 from conductor.intake import DEFAULT_WAIT_SECONDS, serve
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
     from types import FrameType
 
-    from conductor.seams import Citation, Ran, Running
+    from conductor.seams import Adjusting, Citation, Ran, Running
 
 REQUEST_TIMEOUT_SECONDS = 10.0
 """How long a request that is not a long poll may take before it counts as lost.
@@ -110,8 +112,18 @@ class NoEngine:
         )
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    """Load, build, and drive. Returns a shell exit status."""
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    keep_going: Callable[[], bool] = lambda: True,
+) -> int:
+    """Load, build, and drive. Returns a shell exit status.
+
+    `keep_going` is what the loop asks between walks. The default never
+    stops, because a caller that wants this to end is the one that knows
+    when: at the entrypoint that is what `stop_on_termination` hands
+    back, and in a test it is a turn count.
+    """
     arguments = _parse(argv)
     try:
         config = load(arguments.config)
@@ -120,26 +132,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"configuration: {problem}", file=sys.stderr)
         return 2
 
-    serving = True
-
-    def keep_going() -> bool:
-        return serving
-
     with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS) as http:
         try:
             serve(
                 HttpTasking(http=http, base_url=config.base_url, token=config.token),
                 config.beamline,
-                adjusting=EpicsControl(),
+                adjusting=control_for(config),
                 running=engine,
                 wait=arguments.wait,
                 keep_going=keep_going,
             )
         except KeyboardInterrupt:
-            serving = False
             print("\nstopping", file=sys.stderr)
 
     return 0
+
+
+def control_for(config: ConductorConfig) -> Adjusting:
+    """The control seam, held to the records this deployment may set.
+
+    Always wrapped, including where nothing is writable. A conductor that
+    dropped the wrapper when it had no scopes would treat an empty
+    configuration as no policy rather than as the strictest one, which is
+    the reading `confinement` exists to refuse.
+
+    Nothing here decides what belongs in the list. That is a fact about
+    where this conductor is pointed, which only the deployment knows, and
+    the one thing this file must not do is supply a default for it.
+    """
+    return Confinement(adjusting=EpicsControl(), writable=config.writable)
 
 
 def engine_for(config: ConductorConfig) -> Running:
@@ -156,10 +177,23 @@ def engine_for(config: ConductorConfig) -> Running:
     exists, which is the part a typo does not get wrong, and would refuse
     a perfectly good seam built by something older than this Protocol.
     """
-    if config.engine_profile is None:
-        return NoEngine()
+    match config.engine:
+        case None:
+            return NoEngine()
+        case TomoscanServer(prefix=prefix, routines=routines):
+            return TomoscanEngine(prefix=prefix, routines=routines)
+        case EngineProfile(profile=profile):
+            return _built_by(profile)
 
-    module_name, _, attribute = config.engine_profile.partition(":")
+
+def _built_by(profile: str) -> Running:
+    """Import what a deployment named, and call it.
+
+    Split out so `engine_for` reads as the choice it is. What the named
+    attribute returns is cast rather than checked, for the reason
+    `engine_for` gives.
+    """
+    module_name, _, attribute = profile.partition(":")
     try:
         module = importlib.import_module(module_name)
     except ImportError as missing:
@@ -198,22 +232,47 @@ def _parse(argv: Sequence[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def stop_on_termination() -> None:
-    """Make a service manager's stop signal behave like Ctrl-C.
+def stop_on_termination() -> Callable[[], bool]:
+    """Ask the loop to stop when its walk ends, on Ctrl-C or on SIGTERM.
 
-    Ctrl-C already arrives as `KeyboardInterrupt`, so the cheapest way to
-    give both signals one shutdown is to make the second arrive that way
-    too. Without this, the loop's orderly stop is reachable only from a
-    keyboard, which a daemon does not have.
+    Returns what `serve` asks between walks. A signal sets the flag and
+    returns, so the walk in progress runs to its last step and reports
+    it. That is the orderly stop `intake` describes and the reason its
+    loop takes a predicate at all.
+
+    Raising is what this did instead, and it reached none of that. A
+    `KeyboardInterrupt` is a `BaseException`, so neither the loop's arm
+    nor `conduct`'s caught one: a signal landing mid-walk unwound
+    through the step that was running, which left the motor wherever
+    that step had got to, the steps after it unreported, and the
+    execution open at the keeper. The flag was set afterwards, around a
+    `serve` that had already returned, where nothing would read it
+    again. `keep_going` answered True for the whole life of every
+    process that ever ran.
+
+    Both signals, because the two want one shutdown and a daemon has no
+    keyboard. The cost is that a stop asked for while the loop sits in a
+    long poll waits for that poll to come back, which `--wait` bounds. A
+    second signal restores the default, so an operator who will not wait
+    that out sends another and the process goes at once.
     """
+    stopping = False
 
-    def interrupt(number: int, frame: FrameType | None) -> None:
-        _ = number, frame
-        raise KeyboardInterrupt
+    def keep_going() -> bool:
+        return not stopping
 
-    signal.signal(signal.SIGTERM, interrupt)
+    def ask_to_stop(number: int, frame: FrameType | None) -> None:
+        nonlocal stopping
+        _ = frame
+        stopping = True
+        signal.signal(number, signal.SIG_DFL)
+        print("\nstopping when this walk ends", file=sys.stderr)
+
+    for number in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(number, ask_to_stop)
+
+    return keep_going
 
 
 if __name__ == "__main__":
-    stop_on_termination()
-    raise SystemExit(main())
+    raise SystemExit(main(keep_going=stop_on_termination()))

@@ -17,12 +17,43 @@ whatever the record holds, which is why `EpicsControl` narrows it before
 arithmetic. `PV.put` returns 1 on success and None on timeout, which is
 why the adapter tests for None rather than for falsehood: a successful put
 of the value 0 must not read as a failure.
+
+A monitor callback is `Callable[..., None]` rather than a written out
+signature. pyepics calls it with keywords and chooses which ones from
+what the channel carries, so a caller takes the two or three it wants
+and `**kw` for the rest. Spelling that as a protocol would describe a
+call pyepics does not make.
 """
 
+from collections.abc import Callable
+from ctypes import c_long
 from typing import Any
 
+from . import ca as ca
+
 class PV:
+    type: str
+    """The DBR type the server answers with, such as `time_char`.
+
+    Read rather than set. It is how a character waveform is told apart
+    from a native string, which matters because the second silently
+    holds forty characters and a beamline file path does not fit.
+    """
+
+    count: int
+    """How many elements the channel holds, which is 1 for a scalar."""
+
     pvname: str
+
+    chid: c_long
+    """The library's handle for the channel, set as the channel is made.
+
+    A channel holds one before anything has answered, which is what
+    lets an unresolved channel be cleared and not only a connected
+    one. Carried here because clearing needs it and `disconnect` does
+    not do it.
+    """
+
     def __init__(
         self,
         pvname: str,
@@ -36,6 +67,7 @@ class PV:
         *,
         as_string: bool = ...,
         timeout: float | None = ...,
+        use_monitor: bool = ...,
     ) -> Any: ...
     def put(
         self,
@@ -62,3 +94,11 @@ def caget(
     as_string: bool = ...,
     timeout: float = ...,
 ) -> Any: ...
+def camonitor(
+    pvname: str,
+    /,
+    *,
+    callback: Callable[..., None] = ...,
+    connection_timeout: float = ...,
+) -> None: ...
+def camonitor_clear(pvname: str, /) -> None: ...

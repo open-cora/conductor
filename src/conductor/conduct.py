@@ -46,9 +46,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from conductor.claims import ClaimConflictError, Ledger
-from conductor.outcomes import Broke, Done, Outcome, Refused, Skipped
+from conductor.outcomes import Broke, Declined, Done, Outcome, Refused, Skipped
 from conductor.procedure import Procedure, Run, Set
-from conductor.seams import ReferenceNotCarriedError
+from conductor.seams import ReferenceNotCarriedError, RoutineNotRunHereError
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -83,7 +83,11 @@ class Walk:
         return all(isinstance(outcome, Done) for outcome in self.outcomes)
 
     def tally(self) -> dict[str, int]:
-        """How many of each outcome, for printing at the end of a session."""
+        """How many of each outcome, for printing at the end of a session.
+
+        The key is absent rather than zero when there is nothing to say,
+        so a tally names only what happened.
+        """
         counted: dict[str, int] = {}
         for outcome in self.outcomes:
             name = type(outcome).__name__
@@ -147,6 +151,12 @@ def conduct(
     shorter of the two. The failure it would otherwise cause is a run
     filed against the wrong step of the right execution, which reads as
     a plausible record and is detectable by nobody.
+
+    Nothing here records where a run's data went. An engine's own name
+    for a run comes back on `Ran` and goes no further, because reading
+    it needs no driving and a reporter watching that engine reads it
+    from the same place: see `seams` for why the seam that did this was
+    taken out rather than kept for the engines that made it easy.
     """
     if cites is not None and len(cites) != len(procedure.steps):
         raise ValueError(
@@ -200,12 +210,24 @@ def _attempt(
     A recording seam that raised inside this `except Exception` would be
     recorded as the step having broken, which is a lie about the step:
     the move arrived and only the telling failed.
+
+    `RoutineNotRunHereError` is caught above it for a related reason. An
+    engine asked for something it was never given has not broken, and
+    the arm below cannot see the difference, so without this one a
+    beamline that simply does not do a thing reports a fault and
+    whatever reads faults goes looking for a person.
     """
     try:
         with book.granted(holder, step.claim):
             return _perform(step, described, adjusting, running, cites)
     except ClaimConflictError as conflict:
         return Refused(step=described, holder=conflict.holder, overlap=conflict.overlap)
+    except RoutineNotRunHereError as declined:
+        return Declined(
+            step=described,
+            routine=declined.routine,
+            cause=f"{type(declined).__name__}: {declined}",
+        )
     except Exception as exc:
         return Broke(step=described, cause=f"{type(exc).__name__}: {exc}")
 

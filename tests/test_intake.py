@@ -18,10 +18,15 @@ from conductor.intake import serve
 from conductor.outcomes import Done, Refused
 from conductor.procedure import Procedure, Run, Set
 from conductor.seams import Assignment
-from tests._fakes import CollectingTasking, RecordingAdjusting, RecordingRunning
+from tests._fakes import (
+    CollectingTasking,
+    RecordingAdjusting,
+    RecordingRunning,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
 
 BEAMLINE = "2-bm"
 EXECUTION = "an-execution"
@@ -54,14 +59,15 @@ def _serve(
     ledger: Ledger | None = None,
     slept: list[float] | None = None,
     said: list[str] | None = None,
+    engine: RecordingRunning | None = None,
 ) -> tuple[RecordingAdjusting, RecordingRunning]:
     control = RecordingAdjusting()
-    engine = RecordingRunning()
+    driven = engine if engine is not None else RecordingRunning()
     serve(
         keeper,
         BEAMLINE,
         adjusting=control,
-        running=engine,
+        running=driven,
         wait=7.0,
         backoff=3.0,
         ledger=ledger,
@@ -69,7 +75,7 @@ def _serve(
         pause=(slept if slept is not None else []).append,
         note=(said if said is not None else []).append,
     )
-    return control, engine
+    return control, driven
 
 
 def test_an_idle_beamline_asks_again_and_claims_nothing() -> None:
